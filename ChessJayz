@@ -1,0 +1,299 @@
+repeat task.wait() until game:IsLoaded()
+
+local Players=game:GetService("Players")
+local RS=game:GetService("ReplicatedStorage")
+local TweenService=game:GetService("TweenService")
+local UserInputService=game:GetService("UserInputService")
+local HttpService=game:GetService("HttpService")
+
+local _http=(syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+
+if getgenv().__CH_DATA and getgenv().__CH_DATA.handlers then
+    for _,c in pairs(getgenv().__CH_DATA.handlers) do
+        if c then pcall(function() c:Disconnect() end) end
+    end
+end
+
+getgenv().__CH_DATA={
+    engines={"Stockfish","Lc0","Torch","Dx100","KnightX","HyperX","Br1lliance"},
+    handlers={},
+    openings={},
+    config={autoplay=false,engine="Stockfish"}
+}
+
+local function safeHttp(payload)
+    local ok,res=pcall(function() return _http(payload) end)
+    if not ok or not res then return nil end
+    return res
+end
+
+local function fetchFEN()
+    local ev=RS:FindFirstChild("InternalClientEvents")
+    if not ev then return nil end
+    local ok,active=pcall(function() return ev.GetActiveTableset:Invoke() end)
+    if not ok or not active then return nil end
+    local ok2,fenobj=pcall(function() return active:WaitForChild("FEN",2) end)
+    if not ok2 or not fenobj then return nil end
+    return fenobj.Value
+end
+
+local function recordMove(engine,move)
+    getgenv().__CH_DATA.openings[engine]=getgenv().__CH_DATA.openings[engine] or {}
+    getgenv().__CH_DATA.openings[engine][move]=true
+end
+
+local function alreadyPlayed(engine,move)
+    local mem=getgenv().__CH_DATA.openings[engine]
+    return mem and mem[move]
+end
+
+local function queryWebEngine(fen)
+    local res=safeHttp({
+        Url="https://chess-api.com/v1",
+        Method="POST",
+        Headers={["Content-Type"]="application/json"},
+        Body=HttpService:JSONEncode({fen=fen})
+    })
+    if not res or not res.Body then return nil end
+    local ok,data=pcall(function() return HttpService:JSONDecode(res.Body) end)
+    if not ok or not data then return nil end
+    if data.from and data.to then return data.from,data.to end
+    return nil
+end
+
+local function queryLocalLc0(fen)
+    local plr=Players.LocalPlayer
+    local ok,mod=pcall(function() return plr.PlayerScripts:FindFirstChild("AI") and require(plr.PlayerScripts.AI:FindFirstChild("Lc0")) end)
+    if not ok or not mod then return nil end
+    local ok2,out=pcall(function() return mod:GetBestMove(fen,2000) end)
+    if not ok2 then return nil end
+    if type(out)=="table" and #out>=2 then return out[1],out[2] end
+    if type(out)=="string" and #out>=4 then return out:sub(1,2),out:sub(3,4) end
+    if type(out)=="string" and #out>0 then return out end
+    return nil
+end
+
+local function queryTorch(fen)
+    local moves={}
+    local from,to=queryLocalLc0(fen)
+    if from and to then
+        local move=from..to
+        if not alreadyPlayed("Torch",move) then
+            table.insert(moves,{from=from,to=to,score=math.random(60,80)})
+        end
+    end
+    local wf,wt=queryWebEngine(fen)
+    if wf and wt then
+        local move=wf..wt
+        if not alreadyPlayed("Torch",move) then
+            table.insert(moves,{from=wf,to=wt,score=math.random(70,90)})
+        end
+    end
+    table.sort(moves,function(a,b) return a.score>b.score end)
+    if #moves>0 then
+        recordMove("Torch",moves[1].from..moves[1].to)
+        return moves[1].from,moves[1].to
+    end
+    return wf,wt
+end
+
+local function queryHyperX(fen)
+    local results={}
+    for _,e in ipairs({"Stockfish","Lc0","Dx100","Torch"}) do
+        local f,t
+        if e=="Stockfish" or e=="Dx100" then f,t=queryWebEngine(fen)
+        elseif e=="Torch" then f,t=queryTorch(fen)
+        else f,t=queryLocalLc0(fen) end
+        if f then
+            local move=f..(t or "")
+            if not alreadyPlayed("HyperX",move) then
+                table.insert(results,{engine=e,from=f,to=t})
+            end
+        end
+    end
+    if #results>0 then
+        local chosen=results[math.random(1,#results)]
+        recordMove("HyperX",chosen.from..chosen.to)
+        return chosen.from,chosen.to
+    end
+    return nil
+end
+
+local function queryBr1lliance(fen)
+    local candidates={}
+    local function kingSafetyBoost(move)
+        if move:match("e1g1") or move:match("e1c1") or move:match("e8g8") or move:match("e8c8") then return 8 end
+        if math.random()<0.3 then return math.random(3,6) end
+        return 0
+    end
+    for _,e in ipairs({"Stockfish","Lc0","Torch","Dx100","HyperX"}) do
+        local f,t
+        if e=="Lc0" then f,t=queryLocalLc0(fen)
+        elseif e=="Torch" then f,t=queryTorch(fen)
+        elseif e=="HyperX" then f,t=queryHyperX(fen)
+        else f,t=queryWebEngine(fen) end
+        if f and t then
+            local move=f..t
+            if not alreadyPlayed("Br1lliance",move) then
+                local score=math.random(80,99)+kingSafetyBoost(move)
+                table.insert(candidates,{from=f,to=t,brilliance=score})
+            end
+        end
+    end
+    table.sort(candidates,function(a,b) return a.brilliance>b.brilliance end)
+    if #candidates>0 then
+        recordMove("Br1lliance",candidates[1].from..candidates[1].to)
+        return candidates[1].from,candidates[1].to
+    end
+    return nil
+end
+
+local function queryKnightX(fen)
+    local candidates={}
+    local function kingSafetyBoost(move)
+        if move:match("e1g1") or move:match("e1c1") or move:match("e8g8") or move:match("e8c8") then return 8 end
+        if math.random()<0.3 then return math.random(3,6) end
+        return 0
+    end
+    for _,e in ipairs({"Stockfish","Lc0","Torch","Dx100"}) do
+        local f,t
+        if e=="Lc0" then f,t=queryLocalLc0(fen)
+        elseif e=="Torch" then f,t=queryTorch(fen)
+        else f,t=queryWebEngine(fen) end
+        if f and t then
+            local move=f..t
+            if not alreadyPlayed("KnightX",move) then
+                local score=math.random(75,89)+kingSafetyBoost(move)
+                table.insert(candidates,{from=f,to=t,score=score})
+            end
+        end
+    end
+    table.sort(candidates,function(a,b) return a.score>b.score end)
+    if #candidates>0 then
+        recordMove("KnightX",candidates[1].from..candidates[1].to)
+        return candidates[1].from,candidates[1].to
+    end
+    return nil
+end
+
+local function compute(engine)
+    local eng=engine or getgenv().__CH_DATA.config.engine
+    local fen
+    repeat task.wait(0.04) fen=fetchFEN() until fen~=nil
+    if eng=="Stockfish" then return queryWebEngine(fen)
+    elseif eng=="Lc0" then return queryLocalLc0(fen)
+    elseif eng=="Torch" then return queryTorch(fen)
+    elseif eng=="Dx100" then local a,b=queryWebEngine(fen) if a and b then return a,b end return queryLocalLc0(fen)
+    elseif eng=="HyperX" then return queryHyperX(fen)
+    elseif eng=="Br1lliance" then return queryBr1lliance(fen)
+    elseif eng=="KnightX" then return queryKnightX(fen)
+    end
+    return nil
+end
+
+function PlayBestMove(engine)
+    local f,t
+    repeat f,t=compute(engine); task.wait(0.04) until f~=nil
+    if RS:FindFirstChild("Chess") then
+        pcall(function() RS.Chess.SubmitMove:InvokeServer(f..(t or "")) end)
+        return true
+    end
+    return false
+end
+
+local function stopAuto()
+    for _,v in pairs(getgenv().__CH_DATA.handlers) do
+        if v then pcall(function() v:Disconnect() end) end
+    end
+    getgenv().__CH_DATA.handlers={}
+end
+
+local function attempt()
+    task.spawn(function()
+        local ok=PlayBestMove()
+        local tries=0
+        while not ok and tries<5 do
+            tries=tries+1
+            task.wait(1)
+            ok=PlayBestMove()
+        end
+    end)
+end
+
+local function beginAuto()
+    if not getgenv().__CH_DATA.config.autoplay then return end
+    stopAuto()
+    local chess
+    repeat chess=RS:FindFirstChild("Chess"); task.wait(0.1) until chess
+    local moveEvent=chess:WaitForChild("MovePlayedRemoteEvent")
+    local startEvent=chess:WaitForChild("StartGameEvent")
+    getgenv().__CH_DATA.handlers.move=moveEvent.OnClientEvent:Connect(attempt)
+    getgenv().__CH_DATA.handlers.start=startEvent.OnClientEvent:Connect(attempt)
+    attempt()
+end
+
+local UIlib=loadstring(game:HttpGet("https://pastebin.com/raw/yJnNM7eQ"))()
+local Library=UIlib
+local win=Library.CreateLib("ChessHub - By Jayz","DarkTheme")
+local tab=win:NewTab("Main")
+local sect=tab:NewSection("Controls")
+
+sect:NewDropdown("Engine","Select engine",getgenv().__CH_DATA.engines,getgenv().__CH_DATA.config.engine,function(opt)
+    getgenv().__CH_DATA.config.engine=opt
+end)
+
+sect:NewToggle("Auto Play Best Moves","Auto",false,function(state)
+    getgenv().__CH_DATA.config.autoplay=state
+    if state then beginAuto() else stopAuto() end
+end)
+
+sect:NewButton("PlayBestMove","Manual",function() PlayBestMove() end)
+
+local ScreenGui=Instance.new("ScreenGui")
+ScreenGui.Parent=Players.LocalPlayer:WaitForChild("PlayerGui")
+ScreenGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+
+local CircleBtn=Instance.new("TextButton")
+CircleBtn.Parent=ScreenGui
+CircleBtn.Size=UDim2.new(0,40,0,40)
+CircleBtn.Position=UDim2.new(0.9,0,0.1,0)
+CircleBtn.BackgroundColor3=Color3.fromRGB(200,0,0)
+CircleBtn.BackgroundTransparency=0.15
+CircleBtn.Font=Enum.Font.GothamBold
+CircleBtn.Text="❌"
+CircleBtn.TextColor3=Color3.fromRGB(255,255,255)
+CircleBtn.TextScaled=true
+CircleBtn.AutoButtonColor=false
+
+local UICorner=Instance.new("UICorner")
+UICorner.Parent=CircleBtn
+UICorner.CornerRadius=UDim.new(1,0)
+
+local UIStroke=Instance.new("UIStroke")
+UIStroke.Parent=CircleBtn
+UIStroke.Thickness=1.5
+UIStroke.Transparency=0.35
+UIStroke.Color=Color3.fromRGB(255,255,255)
+
+local uiVisible=true
+
+local function pulseEffect(color)
+    local t1=TweenService:Create(CircleBtn,TweenInfo.new(0.12,Enum.EasingStyle.Sine,Enum.EasingDirection.Out),{Size=UDim2.new(0,46,0,46)})
+    t1:Play()
+    t1.Completed:Wait()
+    local t2=TweenService:Create(CircleBtn,TweenInfo.new(0.12,Enum.EasingStyle.Sine,Enum.EasingDirection.In),{Size=UDim2.new(0,40,0,40)})
+    t2:Play()
+    CircleBtn.BackgroundColor3=color
+end
+
+CircleBtn.MouseButton1Click:Connect(function()
+    uiVisible=not uiVisible
+    Library:ToggleUI()
+    if uiVisible then
+        CircleBtn.Text="❌"
+        pulseEffect(Color3.fromRGB(200,0,0))
+    else
+        CircleBtn.Text="✔️"
+        pulseEffect(Color3.fromRGB(0,200,0))
+    end
+end)
