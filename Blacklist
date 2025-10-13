@@ -1,13 +1,12 @@
 local Players = game:GetService("Players")
 
 local BlacklistRobloxIds = {
-    [123456789] = true,
-    [987654321] = true,
+    [] = true,
+    [] = true,
 }
 
 local BlacklistDiscordIds = {
-    ["REPLACE_WITH_DISCORD_ID"] = true,
-    ["ANOTHER_DISCORD_ID"] = true,
+    ["1319160478911561749"] = true,
 }
 
 local function checkAndKick(player)
