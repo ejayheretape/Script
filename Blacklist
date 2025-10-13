@@ -1,0 +1,31 @@
+local Players = game:GetService("Players")
+
+local BlacklistRobloxIds = {
+    [123456789] = true,
+    [987654321] = true,
+}
+
+local BlacklistDiscordIds = {
+    ["REPLACE_WITH_DISCORD_ID"] = true,
+    ["ANOTHER_DISCORD_ID"] = true,
+}
+
+local function checkAndKick(player)
+    if BlacklistRobloxIds[player.UserId] then
+        player:Kick("You're Blacklisted")
+        warn(("Kicked blacklisted player %s (UserId=%d)"):format(player.Name, player.UserId))
+        return
+    end
+    local discordId = player:GetAttribute("DiscordId")
+    if discordId and BlacklistDiscordIds[discordId] then
+        player:Kick("You're Blacklisted")
+        warn(("Kicked blacklisted player %s (DiscordId=%s)"):format(player.Name, discordId))
+        return
+    end
+end
+
+Players.PlayerAdded:Connect(checkAndKick)
+
+for _, player in pairs(Players:GetPlayers()) do
+    checkAndKick(player)
+end
