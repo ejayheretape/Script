@@ -1,7 +1,7 @@
 local Players = game:GetService("Players")
 
 local BlacklistRobloxIds = {
-    [] = true,
+    [7990057403] = true,
     [] = true,
 }
 
