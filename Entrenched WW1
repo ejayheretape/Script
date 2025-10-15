@@ -1,0 +1,266 @@
+if game.PlaceId == 3678761576 then
+    local VersionTag = "Lunar hub"
+    local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+
+    local Window = Rayfield:CreateWindow({
+        Name = VersionTag,
+        LoadingTitle = "Initializing",
+        LoadingSubtitle = "Rayfield UI",
+        ConfigurationSaving = {Enabled = false},
+        Discord = {Enabled = false},
+        KeySystem = false
+    })
+
+    local Tab = Window:CreateTab("Aimbot + ESP")
+
+    local globalState = {
+        esp = false,
+        aim = false,
+        fov = 150,
+        dotSize = 25,
+        hitboxSize = 100
+    }
+
+    local teamFilter = false
+    local activeSession = nil
+
+    local function ensureSession()
+        if (globalState.esp or globalState.aim) and not activeSession then
+            activeSession = (function()
+                local S = {}
+                S.Players = game:GetService("Players")
+                S.UIS = game:GetService("UserInputService")
+                S.CoreGui = game:GetService("CoreGui")
+                S.Run = game:GetService("RunService")
+                local lp = S.Players.LocalPlayer
+                local cam = workspace.CurrentCamera
+                local cont = Instance.new("Folder", S.CoreGui)
+                cont.Name = "ESP_Containers_v2"
+                local state = {dots = {}, boxes = {}}
+                local connections = {}
+
+                local function makeBox(pl)
+                    if state.boxes[pl] then return end
+                    local sq = Drawing.new("Square")
+                    sq.Thickness = 1
+                    sq.Filled = false
+                    sq.Color = Color3.fromRGB(255, 0, 0)
+                    sq.Visible = false
+                    state.boxes[pl] = sq
+                end
+
+                local function destroyBox(pl)
+                    if state.boxes[pl] then
+                        pcall(function() state.boxes[pl]:Remove() end)
+                        state.boxes[pl] = nil
+                    end
+                end
+
+                local function updateBoxFor(pl, char)
+                    local sq = state.boxes[pl]
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                    if not sq or not hrp then return end
+                    local p, on = cam:WorldToViewportPoint(hrp.Position)
+                    if on then
+                        local sz = Vector2.new(24, 48)
+                        local pos = Vector2.new(p.X - sz.X/2, p.Y - sz.Y/2)
+                        sq.Position = pos
+                        sq.Size = sz
+                        local sameTeam = (pl.Team == lp.Team)
+                        sq.Visible = globalState.esp and (not teamFilter or not sameTeam)
+                    else
+                        sq.Visible = false
+                    end
+                end
+
+                local function updateDotFor(pl, info)
+                    if not info or not info.gui or not info.head then return end
+                    local sameTeam = (pl.Team == lp.Team)
+                    info.gui.Enabled = globalState.esp and (not teamFilter or not sameTeam)
+                    info.gui.Size = UDim2.new(0, globalState.dotSize, 0, globalState.dotSize)
+                    if info.head:IsA("BasePart") then
+                        info.gui.Adornee = info.head
+                    end
+                end
+
+                local function applyHitboxSize(hrp)
+                    if hrp and hrp:IsA("BasePart") then
+                        pcall(function()
+                            hrp.Size = Vector3.new(globalState.hitboxSize, globalState.hitboxSize, globalState.hitboxSize)
+                            hrp.Massless = true
+                            hrp.CanCollide = false
+                            hrp.Transparency = 1
+                        end)
+                    end
+                end
+
+                local function addPlayer(pl)
+                    if pl == lp then return end
+                    makeBox(pl)
+                    local function setupCharacter(ch)
+                        local head = ch:FindFirstChild("Head")
+                        local hrp = ch:FindFirstChild("HumanoidRootPart")
+                        if not head or not hrp then return end
+                        if state.dots[pl] and state.dots[pl].gui then
+                            pcall(function() state.dots[pl].gui:Destroy() end)
+                        end
+                        local bgui = Instance.new("BillboardGui", cont)
+                        bgui.Name = "ESPDot_" .. pl.UserId
+                        bgui.Adornee = head
+                        bgui.Size = UDim2.new(0, globalState.dotSize, 0, globalState.dotSize)
+                        bgui.AlwaysOnTop = true
+                        bgui.LightInfluence = 0
+                        local f = Instance.new("Frame", bgui)
+                        f.Size = UDim2.new(1, 0, 1, 0)
+                        f.BorderSizePixel = 0
+                        f.BackgroundTransparency = 0.2
+                        f.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+                        state.dots[pl] = {gui = bgui, head = head, char = ch}
+                        updateDotFor(pl, state.dots[pl])
+                        applyHitboxSize(hrp)
+                    end
+
+                    if pl.Character then setupCharacter(pl.Character) end
+                    connections[#connections+1] = pl.CharacterAdded:Connect(function(c)
+                        task.wait(1)
+                        setupCharacter(c)
+                    end)
+                    connections[#connections+1] = pl.CharacterRemoving:Connect(function(c)
+                        if state.dots[pl] and state.dots[pl].char == c then
+                            if state.dots[pl].gui then
+                                pcall(function() state.dots[pl].gui:Destroy() end)
+                            end
+                            state.dots[pl] = nil
+                        end
+                    end)
+                end
+
+                for _, p in ipairs(S.Players:GetPlayers()) do addPlayer(p) end
+                connections[#connections+1] = S.Players.PlayerAdded:Connect(addPlayer)
+                connections[#connections+1] = S.Players.PlayerRemoving:Connect(function(p)
+                    if state.dots[p] and state.dots[p].gui then
+                        pcall(function() state.dots[p].gui:Destroy() end)
+                    end
+                    state.dots[p] = nil
+                    destroyBox(p)
+                end)
+
+                local espLoop = S.Run.RenderStepped:Connect(function()
+                    for p, info in pairs(state.dots) do
+                        if not info.head or not info.head:IsDescendantOf(workspace) then
+                            if info.gui then pcall(function() info.gui:Destroy() end) end
+                            state.dots[p] = nil
+                            destroyBox(p)
+                        else
+                            updateDotFor(p, info)
+                            updateBoxFor(p, info.char)
+                        end
+                    end
+                end)
+                connections[#connections+1] = espLoop
+
+                local function findClosest()
+                    local t, best = nil, globalState.fov
+                    for p, info in pairs(state.dots) do
+                        local h = info.head
+                        if h then
+                            local sameTeam = (p.Team == lp.Team)
+                            if not teamFilter or not sameTeam then
+                                local s, on = cam:WorldToViewportPoint(h.Position)
+                                if on then
+                                    local d = (Vector2.new(s.X, s.Y) - S.UIS:GetMouseLocation()).Magnitude
+                                    if d < best then
+                                        t = h
+                                        best = d
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    return t
+                end
+
+                local aimLoop = S.Run.RenderStepped:Connect(function()
+                    if globalState.aim and S.UIS:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then
+                        local tgt = findClosest()
+                        if tgt then
+                            cam.CFrame = CFrame.new(cam.CFrame.Position, tgt.Position)
+                        end
+                    end
+                end)
+                connections[#connections+1] = aimLoop
+
+                return function()
+                    pcall(function() if cont then cont:Destroy() end end)
+                    for _, box in pairs(state.boxes) do pcall(function() box:Remove() end) end
+                    for _, conn in ipairs(connections) do if conn.Disconnect then pcall(function() conn:Disconnect() end) end end
+                    for p, info in pairs(state.dots) do if info.gui then pcall(function() info.gui:Destroy() end) end end
+                end
+            end)()
+        elseif (not globalState.esp and not globalState.aim) and activeSession then
+            activeSession()
+            activeSession = nil
+        end
+    end
+
+    Tab:CreateToggle({
+        Name = "Team Check",
+        CurrentValue = false,
+        Flag = "TeamCheck",
+        Callback = function(v) teamFilter = v end
+    })
+
+    Tab:CreateToggle({
+        Name = "ESP (Dot + Box)",
+        CurrentValue = false,
+        Flag = "ESP",
+        Callback = function(v) globalState.esp = v ensureSession() end
+    })
+
+    Tab:CreateToggle({
+        Name = "Aimbot (hold RMB)",
+        CurrentValue = false,
+        Flag = "Aimbot",
+        Callback = function(v) globalState.aim = v ensureSession() end
+    })
+
+    Tab:CreateSlider({
+        Name = "Aimbot FOV",
+        Range = {10, 500},
+        Increment = 1,
+        Suffix = "px",
+        CurrentValue = 150,
+        Flag = "FOV",
+        Callback = function(v) globalState.fov = v end
+    })
+
+    Tab:CreateSlider({
+        Name = "Dot Size",
+        Range = {2, 200},
+        Increment = 1,
+        Suffix = "px",
+        CurrentValue = 25,
+        Flag = "DotSize",
+        Callback = function(v) globalState.dotSize = v end
+    })
+
+    Tab:CreateSlider({
+        Name = "Hitbox Size",
+        Range = {5, 200},
+        Increment = 1,
+        Suffix = "units",
+        CurrentValue = 100,
+        Flag = "HitboxSize",
+        Callback = function(v)
+            globalState.hitboxSize = v
+            for _, p in ipairs(game:GetService("Players"):GetPlayers()) do
+                if p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                    pcall(function()
+                        p.Character.HumanoidRootPart.Size = Vector3.new(v, v, v)
+                        p.Character.HumanoidRootPart.Transparency = 1
+                    end)
+                end
+            end
+        end
+    })
+end
