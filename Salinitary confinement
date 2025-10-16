@@ -1,0 +1,209 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+local Window = Rayfield:CreateWindow({
+	Name = "Lunar Hub",
+	LoadingTitle = "Initializing",
+	LoadingSubtitle = "Salinitary Confinement",
+	ConfigurationSaving = { Enabled = true, FolderName = "LunarHub" }
+})
+
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ClientEvents = ReplicatedStorage:WaitForChild("Events"):WaitForChild("Client")
+local highlightFolder = Instance.new("Folder", game.CoreGui)
+highlightFolder.Name = "Highlights"
+
+local Tab = Window:CreateTab("Visuals")
+
+local screenGui = Instance.new("ScreenGui", LocalPlayer:WaitForChild("PlayerGui"))
+screenGui.Name = "SuitDisplay"
+local label = Instance.new("TextLabel", screenGui)
+label.AnchorPoint = Vector2.new(0.5, 0.5)
+label.Position = UDim2.new(0.5, 0, 0.9, 0)
+label.Size = UDim2.new(0, 320, 0, 44)
+label.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+label.BackgroundTransparency = 0.6
+label.TextColor3 = Color3.fromRGB(255, 255, 255)
+label.TextScaled = true
+label.Font = Enum.Font.Arcade
+label.Text = ""
+label.TextWrapped = true
+label.TextYAlignment = Enum.TextYAlignment.Center
+label.TextXAlignment = Enum.TextXAlignment.Center
+local corner = Instance.new("UICorner", label)
+corner.CornerRadius = UDim.new(0, 12)
+
+local suitEmojis = { Heart = "♥️", Club = "♣️", Spade = "♠️", Diamond = "♦️" }
+local espColor = Color3.fromRGB(255, 0, 0)
+local espEnabled = false
+local symbolEnabled = false
+
+local function applyColorToExistingHighlights(color)
+	for _, v in pairs(highlightFolder:GetChildren()) do
+		if v:IsA("Highlight") then
+			v.FillColor = color
+		end
+	end
+end
+
+local function createOrUpdateHighlight(player)
+	if not player or not player.Character then return end
+	local name = player.Name .. "_Highlight"
+	local existing = highlightFolder:FindFirstChild(name)
+	if existing and existing:IsA("Highlight") then
+		existing.FillColor = espColor
+		return
+	end
+	local h = Instance.new("Highlight")
+	h.Name = name
+	h.FillColor = espColor
+	h.OutlineColor = Color3.fromRGB(255, 255, 255)
+	h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	h.Adornee = player.Character
+	h.Parent = highlightFolder
+end
+
+local function removeHighlight(player)
+	local h = highlightFolder:FindFirstChild(player.Name .. "_Highlight")
+	if h then h:Destroy() end
+end
+
+local function updateHighlights()
+	for _, p in pairs(Players:GetPlayers()) do
+		removeHighlight(p)
+		if espEnabled then
+			local s = p:FindFirstChild("Settings")
+			if s then
+				local r = s:FindFirstChild("Role")
+				if r and r:IsA("StringValue") and r.Value == "Jack of Hearts" then
+					createOrUpdateHighlight(p)
+				end
+			end
+		end
+	end
+end
+
+local function updateSuitDisplay()
+	local s = LocalPlayer:FindFirstChild("Settings")
+	if not s then label.Text = "" return end
+	local n = s:FindFirstChild("Necklace")
+	if not n or not n:IsA("StringValue") then label.Text = "" return end
+	local v = n.Value
+	local e = suitEmojis[v] or ""
+	label.Text = "Your Suit Is: " .. v .. " " .. e
+end
+
+local function enableSymbolGUI()
+	if not symbolEnabled then return end
+	local c = LocalPlayer.Character
+	if not c then return end
+	local h = c:FindFirstChild("Head")
+	if h and h:FindFirstChild("SymbolGUI") then
+		h.SymbolGUI.Enabled = true
+	end
+end
+
+Tab:CreateToggle({
+	Name = "ESP (Jack)",
+	CurrentValue = false,
+	Flag = "JackESP",
+	Callback = function(val)
+		espEnabled = val
+		if not espEnabled then
+			for _, v in pairs(highlightFolder:GetChildren()) do
+				if v:IsA("Highlight") then v:Destroy() end
+			end
+		else
+			updateHighlights()
+		end
+	end
+})
+
+Tab:CreateToggle({
+	Name = "Show Symbol",
+	CurrentValue = false,
+	Flag = "ShowSymbol",
+	Callback = function(val)
+		symbolEnabled = val
+		enableSymbolGUI()
+	end
+})
+
+Tab:CreateDropdown({
+	Name = "Select ESP(Jack) Color",
+	Options = {"Red", "Green", "Blue", "Yellow", "Purple", "Cyan", "White"},
+	CurrentOption = "Red",
+	Flag = "ESPColor",
+	Callback = function(option)
+		local colors = {
+			Red = Color3.fromRGB(255, 0, 0),
+			Green = Color3.fromRGB(0, 255, 0),
+			Blue = Color3.fromRGB(0, 0, 255),
+			Yellow = Color3.fromRGB(255, 255, 0),
+			Purple = Color3.fromRGB(128, 0, 255),
+			Cyan = Color3.fromRGB(0, 255, 255),
+			White = Color3.fromRGB(255, 255, 255)
+		}
+		espColor = colors[option] or Color3.fromRGB(255, 0, 0)
+		applyColorToExistingHighlights(espColor)
+		updateHighlights()
+	end
+})
+
+for _, p in pairs(Players:GetPlayers()) do
+	local s = p:FindFirstChild("Settings")
+	if s then
+		local r = s:FindFirstChild("Role")
+		if r and r:IsA("StringValue") then
+			r.Changed:Connect(updateHighlights)
+		end
+	end
+	p.ChildAdded:Connect(function(c)
+		if c.Name == "Settings" then
+			local r = c:WaitForChild("Role", 5)
+			if r and r:IsA("StringValue") then
+				r.Changed:Connect(updateHighlights)
+			end
+		end
+	end)
+end
+
+Players.PlayerAdded:Connect(function(p)
+	p.CharacterAdded:Connect(function()
+		task.wait(1)
+		updateHighlights()
+	end)
+	p.ChildAdded:Connect(function(c)
+		if c.Name == "Settings" then
+			local r = c:WaitForChild("Role", 5)
+			if r and r:IsA("StringValue") then
+				r.Changed:Connect(updateHighlights)
+			end
+		end
+	end)
+end)
+
+Players.PlayerRemoving:Connect(removeHighlight)
+
+local localSettings = LocalPlayer:WaitForChild("Settings", 10)
+if localSettings then
+	local necklace = localSettings:FindFirstChild("Necklace")
+	if necklace and necklace:IsA("StringValue") then
+		updateSuitDisplay()
+		necklace.Changed:Connect(updateSuitDisplay)
+	end
+	localSettings.ChildAdded:Connect(function(c)
+		if c.Name == "Necklace" and c:IsA("StringValue") then
+			updateSuitDisplay()
+			c.Changed:Connect(updateSuitDisplay)
+		end
+	end)
+end
+
+task.spawn(function()
+	while task.wait(2) do
+		enableSymbolGUI()
+		updateHighlights()
+	end
+end)
