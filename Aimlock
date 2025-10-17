@@ -1,0 +1,121 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local Workspace = game:GetService("Workspace")
+
+local headLockEnabled = false
+
+local function canSeeTarget(target)
+    if not target or not target.Character or not target.Character:FindFirstChild("Head") then return false end
+    local origin = Camera.CFrame.Position
+    local direction = (target.Character.Head.Position - origin).Unit * 500
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    raycastParams.FilterDescendantsInstances = {LocalPlayer.Character}
+    local ray = Workspace:Raycast(origin, direction, raycastParams)
+    if ray then
+        return ray.Instance:IsDescendantOf(target.Character)
+    else
+        return true
+    end
+end
+
+local function getNearestPlayer()
+    local nearest = nil
+    local shortestDist = math.huge
+    local myChar = LocalPlayer.Character
+    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
+    local myPos = myChar.HumanoidRootPart.Position
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Team ~= LocalPlayer.Team and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChild("Head") then
+            if canSeeTarget(player) then
+                local dist = (player.Character.HumanoidRootPart.Position - myPos).Magnitude
+                if dist < shortestDist then
+                    shortestDist = dist
+                    nearest = player
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+local function lockOnToHead(targetPlayer)
+    if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("Head") then
+        Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPlayer.Character.Head.Position)
+    end
+end
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "HeadLockGUI"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local button = Instance.new("TextButton")
+button.Size = UDim2.new(0, 60, 0, 60)
+button.Position = UDim2.new(0, 50, 0, 50)
+button.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+button.Text = "Head\nLock"
+button.TextColor3 = Color3.new(1, 1, 1)
+button.TextScaled = true
+button.Font = Enum.Font.SourceSansBold
+button.BorderSizePixel = 0
+button.BackgroundTransparency = 0
+button.Parent = screenGui
+button.AutoButtonColor = true
+
+local uiCorner = Instance.new("UICorner")
+uiCorner.CornerRadius = UDim.new(0.5, 0)
+uiCorner.Parent = button
+
+button.MouseButton1Click:Connect(function()
+    headLockEnabled = not headLockEnabled
+    button.BackgroundColor3 = headLockEnabled and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)
+end)
+
+local dragging = false
+local dragInput, dragStart, startPos
+
+local function update(input)
+    local delta = input.Position - dragStart
+    button.Position = UDim2.new(
+        0,
+        math.clamp(startPos.X + delta.X, 0, workspace.CurrentCamera.ViewportSize.X - button.AbsoluteSize.X),
+        0,
+        math.clamp(startPos.Y + delta.Y, 0, workspace.CurrentCamera.ViewportSize.Y - button.AbsoluteSize.Y)
+    )
+end
+
+button.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = button.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+button.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        update(input)
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if headLockEnabled then
+        local nearest = getNearestPlayer()
+        lockOnToHead(nearest)
+    end
+end)
