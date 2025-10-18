@@ -1,0 +1,334 @@
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local Debris = game:GetService("Debris")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local CONFIG = {
+    LOADING_STEPS = {5, 12, 18, 27, 35, 43, 55, 65, 75, 85, 92, 97, 100},
+    LOADING_TIME = 7,
+    NEON_COLOR = Color3.fromRGB(0, 170, 255),
+    BG_COLOR = Color3.fromRGB(25, 25, 25),
+    ACCENT_COLOR = Color3.fromRGB(18, 18, 18)
+}
+
+local scriptList = {
+    {name = "Chess Club", code = 'loadstring(game:HttpGet("https://pastebin.com/raw/EbUXDV3v"))()'},
+    {name = "Entrenched WW1", code = 'loadstring(game:HttpGet("https://pastebin.com/raw/cvrDMsEx", true))()'},
+    {name = "Salinitary Confinement", code = 'loadstring(game:HttpGet("https://pastebin.com/raw/TAEqmPEe"))()'},
+    {name = "Aimlock Universal", code = 'loadstring(game:HttpGet("https://pastebin.com/raw/q0D0C3M4"))()'}
+}
+
+local function createUIElement(className, properties)
+    local element = Instance.new(className)
+    for prop, value in pairs(properties or {}) do
+        element[prop] = value
+    end
+    return element
+end
+
+local function addOutline(obj, thickness, color)
+    return createUIElement("UIStroke", {
+        Parent = obj,
+        Thickness = thickness or 1.5,
+        Color = color or CONFIG.NEON_COLOR,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    })
+end
+
+local function createNeonFrame(size, position, parent, bgColor, radius)
+    local frame = createUIElement("Frame", {
+        Size = size,
+        Position = position,
+        Parent = parent,
+        BackgroundColor3 = bgColor or CONFIG.ACCENT_COLOR,
+        BackgroundTransparency = 0,
+        ZIndex = 10
+    })
+    createUIElement("UICorner", {
+        Parent = frame,
+        CornerRadius = UDim.new(0, radius or 12)
+    })
+    addOutline(frame)
+    return frame
+end
+
+local function createLoadingScreen()
+    local gui = createUIElement("ScreenGui", {
+        Name = "LunarHubLoading",
+        ResetOnSpawn = false,
+        IgnoreGuiInset = true,
+        Parent = playerGui,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    })
+
+    local loadingFrame = createNeonFrame(
+        UDim2.new(0, 400, 0, 100),
+        UDim2.new(0.5, 0, 0.5, 0),
+        gui,
+        CONFIG.BG_COLOR,
+        16
+    )
+    loadingFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+
+    local loadingBarBG = createNeonFrame(
+        UDim2.new(0, 360, 0, 20),
+        UDim2.new(0.5, 0, 0.6, 0),
+        loadingFrame,
+        Color3.fromRGB(40, 40, 40),
+        10
+    )
+    loadingBarBG.AnchorPoint = Vector2.new(0.5, 0.5)
+
+    local loadingBar = createUIElement("Frame", {
+        Size = UDim2.new(0, 0, 1, 0),
+        BackgroundColor3 = CONFIG.NEON_COLOR,
+        Parent = loadingBarBG,
+        ZIndex = 11
+    })
+    createUIElement("UICorner", {
+        Parent = loadingBar,
+        CornerRadius = UDim.new(0, 10)
+    })
+
+    local loadingText = createUIElement("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 25),
+        Position = UDim2.new(0, 0, 0.3, 0),
+        BackgroundTransparency = 1,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        Font = Enum.Font.GothamBold,
+        TextSize = 18,
+        Text = "Loading 0%",
+        Parent = loadingFrame,
+        ZIndex = 11
+    })
+
+    return gui, loadingFrame, loadingBar, loadingText
+end
+
+local function createMainUI()
+    local gui = createUIElement("ScreenGui", {
+        Name = "LunarHubMain",
+        ResetOnSpawn = false,
+        IgnoreGuiInset = true,
+        Parent = playerGui,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    })
+
+    local main = createNeonFrame(
+        UDim2.new(0, 500, 0, 320),
+        UDim2.new(0.5, 0, 0.5, 0),
+        gui,
+        CONFIG.BG_COLOR,
+        16
+    )
+    main.AnchorPoint = Vector2.new(0.5, 0.5)
+
+    local header = createUIElement("Frame", {
+        Size = UDim2.new(1, 0, 0, 40),
+        BackgroundTransparency = 1,
+        Parent = main,
+        ZIndex = 10
+    })
+
+    createUIElement("TextLabel", {
+        Text = "🌙 Lunar Hub",
+        Font = Enum.Font.GothamBold,
+        TextSize = 20,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 15, 0, 0),
+        Size = UDim2.new(0, 200, 1, 0),
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = header,
+        ZIndex = 11
+    })
+
+    local closeBtn = createUIElement("TextButton", {
+        Text = "✖",
+        Size = UDim2.new(0, 35, 1, 0),
+        Position = UDim2.new(1, -45, 0, 0),
+        BackgroundTransparency = 1,
+        TextColor3 = Color3.fromRGB(255, 255, 255),
+        Font = Enum.Font.GothamBold,
+        TextSize = 22,
+        Parent = header,
+        ZIndex = 11
+    })
+
+    local tabHolder = createNeonFrame(
+        UDim2.new(0, 150, 1, -60),
+        UDim2.new(0, 15, 0, 50),
+        main,
+        Color3.fromRGB(20, 20, 20),
+        14
+    )
+
+    createUIElement("UIListLayout", {
+        Parent = tabHolder,
+        Padding = UDim.new(0, 10),
+        HorizontalAlignment = Enum.HorizontalAlignment.Center,
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        VerticalAlignment = Enum.VerticalAlignment.Top
+    })
+
+    createUIElement("UIPadding", {
+        Parent = tabHolder,
+        PaddingTop = UDim.new(0, 10),
+        PaddingBottom = UDim.new(0, 10),
+        PaddingLeft = UDim.new(0, 10),
+        PaddingRight = UDim.new(0, 10)
+    })
+
+    local content = createNeonFrame(
+        UDim2.new(1, -190, 1, -60),
+        UDim2.new(0, 175, 0, 50),
+        main,
+        CONFIG.ACCENT_COLOR,
+        14
+    )
+
+    return main, header, closeBtn, tabHolder, content, gui
+end
+
+local function createTabSystem(tabHolder, content)
+    local currentTab = nil
+    local tabs = {}
+
+    local function setActiveTab(newTab)
+        if currentTab == newTab then return end
+        if currentTab then
+            currentTab.BackgroundTransparency = 0
+            currentTab.Content.Visible = false
+        end
+        newTab.BackgroundTransparency = 0.3
+        newTab.Content.Visible = true
+        currentTab = newTab
+    end
+
+    for i, data in ipairs(scriptList) do
+        local tab = createUIElement("TextButton", {
+            Text = data.name,
+            Size = UDim2.new(1, 0, 0, 40),
+            BackgroundColor3 = CONFIG.NEON_COLOR,
+            TextColor3 = Color3.fromRGB(255, 255, 255),
+            Font = Enum.Font.GothamBold,
+            TextSize = 16,
+            Parent = tabHolder,
+            ZIndex = 11
+        })
+        createUIElement("UICorner", {
+            Parent = tab,
+            CornerRadius = UDim.new(0, 8)
+        })
+        addOutline(tab, 1.2, Color3.fromRGB(0, 255, 255))
+
+        local box = createNeonFrame(
+            UDim2.new(1, 0, 1, 0),
+            UDim2.new(0, 0, 0, 0),
+            content,
+            CONFIG.ACCENT_COLOR,
+            12
+        )
+        box.Visible = (i == 1)
+
+        local status = createUIElement("TextLabel", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(0.5, 0, 0.3, 0),
+            Size = UDim2.new(0, 180, 0, 35),
+            BackgroundTransparency = 1,
+            Font = Enum.Font.GothamBold,
+            TextSize = 16,
+            TextColor3 = (data.code ~= "" and Color3.fromRGB(0, 255, 0) or Color3.fromRGB(255, 0, 0)),
+            Text = (data.code ~= "" and "Working" or "Not Working"),
+            Parent = box,
+            ZIndex = 11
+        })
+
+        local runBtn = createUIElement("TextButton", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(0.5, 0, 0.65, 0),
+            Size = UDim2.new(0, 120, 0, 35),
+            BackgroundColor3 = CONFIG.NEON_COLOR,
+            Text = "Run Script",
+            TextColor3 = Color3.fromRGB(255, 255, 255),
+            Font = Enum.Font.GothamBold,
+            TextSize = 16,
+            Parent = box,
+            ZIndex = 11
+        })
+        addOutline(runBtn, 1.2, Color3.fromRGB(0, 255, 255))
+        createUIElement("UICorner", {
+            Parent = runBtn,
+            CornerRadius = UDim.new(0, 8)
+        })
+
+        runBtn.MouseButton1Click:Connect(function()
+            pcall(function()
+                loadstring(data.code)()
+            end)
+            main:Destroy()
+        end)
+
+        tab.MouseButton1Click:Connect(function()
+            setActiveTab(tabs[i])
+        end)
+
+        tabs[i] = {Button = tab, Content = box}
+        if i == 1 then setActiveTab(tabs[i]) end
+    end
+end
+
+local function setupDragging(header, main)
+    local dragging, dragStart, startPos
+    header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = main.Position
+        end
+    end)
+    header.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+end
+
+local function init()
+    local gui, loadingFrame, loadingBar, loadingText = createLoadingScreen()
+    
+    local stepTime = CONFIG.LOADING_TIME / #CONFIG.LOADING_STEPS
+    for _, percent in ipairs(CONFIG.LOADING_STEPS) do
+        local tween = TweenService:Create(
+            loadingBar,
+            TweenInfo.new(stepTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            {Size = UDim2.new(percent/100, 0, 1, 0)}
+        )
+        tween:Play()
+        loadingText.Text = "Loading "..percent.."%"
+        wait(stepTime + (math.random() * 0.1))
+    end
+
+    gui:Destroy()
+    wait(0.1)
+    
+    local main, header, closeBtn, tabHolder, content, mainGui = createMainUI()
+    createTabSystem(tabHolder, content)
+    setupDragging(header, main)
+    
+    closeBtn.MouseButton1Click:Connect(function()
+        mainGui:Destroy()
+    end)
+end
+
+pcall(init)
