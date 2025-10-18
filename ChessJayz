@@ -3,37 +3,21 @@ local RS = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 
--- Owner configuration
-local OWNERS = {9740524856, 9745041987} -- Both UserIDs as owners
-
 getgenv().__CH_DATA = getgenv().__CH_DATA or {
     engines = {"Stockfish","Lc0","Torch","Dx100","KnightX","HyperX","Br1lliance","Undefeated","WurstEngine"},
     config = {engine="Stockfish", autoPlay=false}
 }
 
--- Remote events for owner presence and control
-local function setupRemoteEvents()
-    local ownerPresence = RS:FindFirstChild("OwnerPresence") or Instance.new("RemoteEvent")
-    ownerPresence.Name = "OwnerPresence"
-    ownerPresence.Parent = RS
-    local ownerControl = RS:FindFirstChild("OwnerControl") or Instance.new("RemoteEvent")
-    ownerControl.Name = "OwnerControl"
-    ownerControl.Parent = RS
-    return ownerPresence, ownerControl
-end
-local ownerPresence, ownerControl = setupRemoteEvents()
-
 local function fetchFEN()
     local ev = RS:FindFirstChild("InternalClientEvents")
-    if not ev then warn("fetchFEN: InternalClientEvents not found") return nil end
+    if not ev then return nil end
     local ok, active = pcall(function() return ev.GetActiveTableset:Invoke() end)
-    if not ok or not active then warn("fetchFEN: Failed to get active tableset, ok="..tostring(ok)) return nil end
+    if not ok or not active then return nil end
     for i=1,5 do
         local fenobj = active:FindFirstChild("FEN")
         if fenobj then return fenobj.Value end
         task.wait(0.1)
     end
-    warn("fetchFEN: FEN object not found after retries")
     return nil
 end
 
@@ -70,14 +54,13 @@ local function queryWebEngine(fen, engine)
             res = result
             break
         end
-        warn("queryWebEngine: Attempt "..i.." failed, ok="..tostring(ok)..", result="..tostring(result))
         task.wait(1 * i)
     end
-    if not res or not res.Body then warn("queryWebEngine: All attempts failed") return nil end
+    if not res or not res.Body then return nil end
     local ok2, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
-    if not ok2 or not data then warn("queryWebEngine: JSON decode failed, ok2="..tostring(ok2)) return nil end
+    if not ok2 or not data then return nil end
     local recommendations = data.recommendations or {data}
-    if #recommendations == 0 then warn("queryWebEngine: No recommendations") return nil end
+    if #recommendations == 0 then return nil end
     local selected = recommendations[1]
     if isWurst then
         for _, rec in ipairs(recommendations) do
@@ -88,7 +71,6 @@ local function queryWebEngine(fen, engine)
         end
     end
     if selected.from and selected.to then return selected.from, selected.to end
-    warn("queryWebEngine: Invalid move data")
     return nil
 end
 
@@ -98,11 +80,10 @@ local function computeMove()
     for i=1,attempts do
         fen = fetchFEN()
         if fen then break end
-        warn("computeMove: FEN fetch failed, attempt "..i)
         task.wait(0.5)
     end
-    if not fen then warn("computeMove: No FEN after retries") return nil end
-    if isGameOver(fen) then warn("computeMove: Game over detected") return nil end
+    if not fen then return nil end
+    if isGameOver(fen) then return nil end
     local engine = getgenv().__CH_DATA.config.engine
     return queryWebEngine(fen, engine)
 end
@@ -111,155 +92,35 @@ local function PlayBestMove()
     local f, t = computeMove()
     if f and RS:FindFirstChild("Chess") then
         local ok, err = pcall(function() RS.Chess.SubmitMove:InvokeServer(f..t) end)
-        if not ok then warn("PlayBestMove: SubmitMove failed, error="..tostring(err)) end
-    else
-        warn("PlayBestMove: Invalid move or Chess service missing, f="..tostring(f))
     end
 end
 
 local autoPlayRunning = false
 local matchCount = 0
 local function startAutoPlay()
-    if autoPlayRunning then warn("startAutoPlay: Already running") return end
+    if autoPlayRunning then return end
     autoPlayRunning = true
     matchCount = 0
     spawn(function()
         while getgenv().__CH_DATA.config.autoPlay and autoPlayRunning do
             local success, err = pcall(function()
                 if isGameOver(fetchFEN()) then
-                    warn("AutoPlay: Game over, pausing for new game")
                     task.wait(5)
                     return
                 end
                 PlayBestMove()
                 matchCount = matchCount + 1
-                print("AutoPlay: Completed move for match #"..matchCount)
-                if matchCount % 100 == 0 then
-                    print("AutoPlay: Milestone reached, match #"..matchCount)
-                end
             end)
-            if not success then
-                warn("AutoPlay: Error in move execution, err="..tostring(err))
-                if matchCount >= 6 then
-                    warn("AutoPlay: Passed 6 matches, continuing to monitor")
-                end
-            end
             task.wait(2)
         end
         autoPlayRunning = false
-        print("AutoPlay: Stopped, final match count="..matchCount)
     end)
 end
 
--- Owner presence and control handling
 local player = Players.LocalPlayer
-local isOwner = false
-for _, id in ipairs(OWNERS) do
-    if player.UserId == id then
-        isOwner = true
-        break
-    end
-end
-if isOwner then
-    spawn(function()
-        task.wait(1)
-        ownerPresence:FireAllClients(player.Name)
-        print("OwnerPresence: Broadcasted presence for "..player.Name)
-    end)
-end
-
-local ownerInServer = false
-local ownerName = ""
-ownerPresence.OnClientEvent:Connect(function(name)
-    if ownerInServer then return end -- Show only first owner's presence
-    ownerInServer = true
-    ownerName = name
-    print("OwnerPresence: Detected owner "..name.." in server")
-    local notice = Instance.new("TextLabel")
-    notice.Size = UDim2.new(1, -20, 0, 20)
-    notice.Position = UDim2.new(0, 10, 0, 130)
-    notice.Text = "Owner "..name.." is in server!"
-    notice.TextColor3 = Color3.fromRGB(255, 50, 50)
-    notice.BackgroundTransparency = 1
-    notice.Font = Enum.Font.GothamBold
-    notice.TextScaled = true
-    notice.Parent = frame
-end)
-
-ownerControl.OnClientEvent:Connect(function(command, senderName)
-    if isOwner then return end
-    if command == "disable" then
-        getgenv().__CH_DATA.config.autoPlay = false
-        autoPlayRunning = false
-        autoPlayBtn.Text = "Auto Play: OFF"
-        autoPlayBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 200)
-        print("OwnerControl: AutoPlay disabled by owner "..senderName)
-    elseif command == "destroy" then
-        getgenv().__CH_DATA = nil
-        gui:Destroy()
-        print("OwnerControl: Script destroyed by owner "..senderName)
-    end
-end)
-
--- GUI setup
 local gui = Instance.new("ScreenGui")
 gui.Parent = player:WaitForChild("PlayerGui")
 gui.ResetOnSpawn = false
-
--- Consent popup for users
-local function showConsentPopup()
-    if isOwner then return end
-    local consentFrame = Instance.new("Frame")
-    consentFrame.Size = UDim2.new(0, 200, 0, 120)
-    consentFrame.Position = UDim2.new(0.5, -100, 0.5, -60)
-    consentFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-    consentFrame.Parent = gui
-
-    local consentCorner = Instance.new("UICorner")
-    consentCorner.CornerRadius = UDim.new(0, 10)
-    consentCorner.Parent = consentFrame
-
-    local consentLabel = Instance.new("TextLabel")
-    consentLabel.Size = UDim2.new(1, -20, 0, 60)
-    consentLabel.Position = UDim2.new(0, 10, 0, 10)
-    consentLabel.Text = "This script allows owners to disable or destroy it. Agree to continue."
-    consentLabel.TextColor3 = Color3.new(1, 1, 1)
-    consentLabel.BackgroundTransparency = 1
-    consentLabel.Font = Enum.Font.Gotham
-    consentLabel.TextScaled = true
-    consentLabel.TextWrapped = true
-    consentLabel.Parent = consentFrame
-
-    local agreeBtn = Instance.new("TextButton")
-    agreeBtn.Size = UDim2.new(0.45, 0, 0, 30)
-    agreeBtn.Position = UDim2.new(0.05, 0, 0.7, 0)
-    agreeBtn.Text = "Agree"
-    agreeBtn.TextColor3 = Color3.new(1, 1, 1)
-    agreeBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
-    agreeBtn.Font = Enum.Font.GothamBold
-    agreeBtn.TextScaled = true
-    agreeBtn.Parent = consentFrame
-
-    local disagreeBtn = Instance.new("TextButton")
-    disagreeBtn.Size = UDim2.new(0.45, 0, 0, 30)
-    disagreeBtn.Position = UDim2.new(0.5, 0, 0.7, 0)
-    disagreeBtn.Text = "Disagree"
-    disagreeBtn.TextColor3 = Color3.new(1, 1, 1)
-    disagreeBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
-    disagreeBtn.Font = Enum.Font.GothamBold
-    disagreeBtn.TextScaled = true
-    disagreeBtn.Parent = consentFrame
-
-    agreeBtn.MouseButton1Click:Connect(function()
-        consentFrame:Destroy()
-    end)
-    disagreeBtn.MouseButton1Click:Connect(function()
-        getgenv().__CH_DATA = nil
-        gui:Destroy()
-        print("Consent: User disagreed, script destroyed")
-    end)
-end
-showConsentPopup()
 
 local frame = Instance.new("Frame")
 frame.Size = UDim2.new(0, 180, 0, 150)
@@ -323,73 +184,6 @@ toggleBtn.MouseButton1Click:Connect(function()
     frame.Visible = open
     toggleBtn.Text = open and "❌" or "✔️"
 end)
-
--- Owner control panel
-if isOwner then
-    local lastCommandTime = 0
-    local controlPanel = Instance.new("Frame")
-    controlPanel.Size = UDim2.new(0, 180, 0, 100)
-    controlPanel.Position = UDim2.new(0.7, 0, 0.4, 0)
-    controlPanel.BorderSizePixel = 0
-    controlPanel.Parent = gui
-
-    local cpCorner = Instance.new("UICorner")
-    cpCorner.CornerRadius = UDim.new(0, 10)
-    cpCorner.Parent = controlPanel
-
-    local cpGradient = Instance.new("UIGradient")
-    cpGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(200, 0, 0)), ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 100, 100))}
-    cpGradient.Rotation = 45
-    cpGradient.Parent = controlPanel
-
-    local disableBtn = Instance.new("TextButton")
-    disableBtn.Size = UDim2.new(1, -20, 0, 40)
-    disableBtn.Position = UDim2.new(0, 10, 0, 10)
-    disableBtn.Text = "Disable All Engines"
-    disableBtn.TextColor3 = Color3.new(1, 1, 1)
-    disableBtn.Font = Enum.Font.GothamBold
-    disableBtn.TextScaled = true
-    disableBtn.Parent = controlPanel
-
-    local disableGradient = Instance.new("UIGradient")
-    disableGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 0, 0)), ColorSequenceKeypoint.new(1, Color3.fromRGB(220, 50, 50))}
-    disableGradient.Rotation = 45
-    disableGradient.Parent = disableBtn
-
-    disableBtn.MouseButton1Click:Connect(function()
-        if os.time() - lastCommandTime < 10 then
-            print("OwnerControl: Command cooldown active, wait "..(10 - (os.time() - lastCommandTime)).."s")
-            return
-        end
-        lastCommandTime = os.time()
-        ownerControl:FireAllClients("disable", player.Name)
-        print("OwnerControl: "..player.Name.." sent disable command to all clients")
-    end)
-
-    local destroyBtn = Instance.new("TextButton")
-    destroyBtn.Size = UDim2.new(1, -20, 0, 40)
-    destroyBtn.Position = UDim2.new(0, 10, 0, 50)
-    destroyBtn.Text = "Destroy All Scripts"
-    destroyBtn.TextColor3 = Color3.new(1, 1, 1)
-    destroyBtn.Font = Enum.Font.GothamBold
-    destroyBtn.TextScaled = true
-    destroyBtn.Parent = controlPanel
-
-    local destroyGradient = Instance.new("UIGradient")
-    destroyGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 0, 0)), ColorSequenceKeypoint.new(1, Color3.fromRGB(220, 50, 50))}
-    destroyGradient.Rotation = 45
-    destroyGradient.Parent = destroyBtn
-
-    destroyBtn.MouseButton1Click:Connect(function()
-        if os.time() - lastCommandTime < 10 then
-            print("OwnerControl: Command cooldown active, wait "..(10 - (os.time() - lastCommandTime)).."s")
-            return
-        end
-        lastCommandTime = os.time()
-        ownerControl:FireAllClients("destroy", player.Name)
-        print("OwnerControl: "..player.Name.." sent destroy command to all clients")
-    end)
-end
 
 local label = Instance.new("TextLabel")
 label.Size = UDim2.new(1, -20, 0, 18)
@@ -488,10 +282,6 @@ autoPlayGradient.Rotation = 45
 autoPlayGradient.Parent = autoPlayBtn
 
 autoPlayBtn.MouseButton1Click:Connect(function()
-    if ownerInServer and not isOwner then
-        print("AutoPlay: Blocked by owner presence")
-        return
-    end
     getgenv().__CH_DATA.config.autoPlay = not getgenv().__CH_DATA.config.autoPlay
     autoPlayBtn.Text = "Auto Play: " .. (getgenv().__CH_DATA.config.autoPlay and "ON" or "OFF")
     autoPlayBtn.BackgroundColor3 = getgenv().__CH_DATA.config.autoPlay and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(150, 0, 200)
@@ -499,17 +289,5 @@ autoPlayBtn.MouseButton1Click:Connect(function()
         startAutoPlay()
     else
         autoPlayRunning = false
-        print("AutoPlay: Manually stopped via button")
     end
 end)
-
--- Warning label for owner controls
-local warningLabel = Instance.new("TextLabel")
-warningLabel.Size = UDim2.new(1, -20, 0, 20)
-warningLabel.Position = UDim2.new(0, 10, 0, 110)
-warningLabel.Text = "Owners may disable/destroy script"
-warningLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-warningLabel.BackgroundTransparency = 1
-warningLabel.Font = Enum.Font.Gotham
-warningLabel.TextScaled = true
-warningLabel.Parent = frame
