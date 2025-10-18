@@ -8,6 +8,18 @@ getgenv().__CH_DATA = getgenv().__CH_DATA or {
     config = {engine="Stockfish", autoPlay=false}
 }
 
+-- Remote events for script user and owner control
+local function setupRemoteEvents()
+    local ownerControl = RS:FindFirstChild("OwnerControl") or Instance.new("RemoteEvent")
+    ownerControl.Name = "OwnerControl"
+    ownerControl.Parent = RS
+    local scriptUser = RS:FindFirstChild("ScriptUser") or Instance.new("RemoteEvent")
+    scriptUser.Name = "ScriptUser"
+    scriptUser.Parent = RS
+    return ownerControl, scriptUser
+end
+local ownerControl, scriptUser = setupRemoteEvents()
+
 local function fetchFEN()
     local ev = RS:FindFirstChild("InternalClientEvents")
     if not ev then warn("fetchFEN: InternalClientEvents not found") return nil end
@@ -30,7 +42,7 @@ local function queryWebEngine(fen, engine)
         body.maxThinkingTime = 100
         body.variants = 5
     end
-    local attempts = 5  -- Increased retries for long sessions
+    local attempts = 5
     local res
     for i=1,attempts do
         local ok, result = pcall(function()
@@ -46,7 +58,7 @@ local function queryWebEngine(fen, engine)
             break
         end
         warn("queryWebEngine: Attempt "..i.." failed, ok="..tostring(ok)..", result="..tostring(result))
-        task.wait(1)  -- Increased delay to respect potential undocumented rate limits
+        task.wait(1 * i)
     end
     if not res or not res.Body then warn("queryWebEngine: All attempts failed") return nil end
     local ok2, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
@@ -69,14 +81,14 @@ end
 
 local function computeMove()
     local fen
-    local attempts = 10  -- Increased for longer waits between games
+    local attempts = 10
     for i=1,attempts do
         fen = fetchFEN()
         if fen then break end
         warn("computeMove: FEN fetch failed, attempt "..i)
-        task.wait(0.5)  -- Increased delay to handle game transitions
+        task.wait(0.5)
     end
-    if not fen then warn("computeMove: No FEN after retries - possibly no active game") return nil end
+    if not fen then warn("computeMove: No FEN after retries") return nil end
     local engine = getgenv().__CH_DATA.config.engine
     return queryWebEngine(fen, engine)
 end
@@ -106,22 +118,99 @@ local function startAutoPlay()
             end)
             if not success then
                 warn("AutoPlay: Error in move execution, err="..tostring(err))
-                if matchCount >= 6 then
-                    warn("AutoPlay: Passed 6 matches, continuing to monitor")
-                end
             end
-            task.wait(2)  -- Increased delay to 2 seconds for sustainability over 1000 matches
+            task.wait(2)
         end
         autoPlayRunning = false
         print("AutoPlay: Stopped, final match count="..matchCount)
     end)
 end
 
--- GUI code remains the same as before
+-- Owner control handling
 local player = Players.LocalPlayer
+local ownerInServer = false
+ownerControl.OnClientEvent:Connect(function(command, senderName)
+    if command == "disable" then
+        getgenv().__CH_DATA.config.autoPlay = false
+        autoPlayRunning = false
+        autoPlayBtn.Text = "Auto Play: OFF"
+        autoPlayBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 200)
+        print("OwnerControl: AutoPlay disabled by owner "..senderName)
+    elseif command == "destroy" then
+        getgenv().__CH_DATA = nil
+        gui:Destroy()
+        print("OwnerControl: Script destroyed by owner "..senderName)
+    end
+end)
+
+-- GUI setup
 local gui = Instance.new("ScreenGui")
 gui.Parent = player:WaitForChild("PlayerGui")
 gui.ResetOnSpawn = false
+
+-- Consent popup
+local function showConsentPopup()
+    local consentFrame = Instance.new("Frame")
+    consentFrame.Size = UDim2.new(0, 200, 0, 120)
+    consentFrame.Position = UDim2.new(0.5, -100, 0.5, -60)
+    consentFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    consentFrame.Parent = gui
+
+    local consentCorner = Instance.new("UICorner")
+    consentCorner.CornerRadius = UDim.new(0, 10)
+    consentCorner.Parent = consentFrame
+
+    local consentLabel = Instance.new("TextLabel")
+    consentLabel.Size = UDim2.new(1, -20, 0, 60)
+    consentLabel.Position = UDim2.new(0, 10, 0, 10)
+    consentLabel.Text = "This script allows owners to disable or destroy it. Agree to continue."
+    consentLabel.TextColor3 = Color3.new(1, 1, 1)
+    consentLabel.BackgroundTransparency = 1
+    consentLabel.Font = Enum.Font.Gotham
+    consentLabel.TextScaled = true
+    consentLabel.TextWrapped = true
+    consentLabel.Parent = consentFrame
+
+    local agreeBtn = Instance.new("TextButton")
+    agreeBtn.Size = UDim2.new(0.45, 0, 0, 30)
+    agreeBtn.Position = UDim2.new(0.05, 0, 0.7, 0)
+    agreeBtn.Text = "Agree"
+    agreeBtn.TextColor3 = Color3.new(1, 1, 1)
+    agreeBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+    agreeBtn.Font = Enum.Font.GothamBold
+    agreeBtn.TextScaled = true
+    agreeBtn.Parent = consentFrame
+
+    local disagreeBtn = Instance.new("TextButton")
+    disagreeBtn.Size = UDim2.new(0.45, 0, 0, 30)
+    disagreeBtn.Position = UDim2.new(0.5, 0, 0.7, 0)
+    disagreeBtn.Text = "Disagree"
+    disagreeBtn.TextColor3 = Color3.new(1, 1, 1)
+    disagreeBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+    disagreeBtn.Font = Enum.Font.GothamBold
+    disagreeBtn.TextScaled = true
+    disagreeBtn.Parent = consentFrame
+
+    agreeBtn.MouseButton1Click:Connect(function()
+        consentFrame:Destroy()
+        scriptUser:FireAllClients(player.Name, "join")
+        print("ScriptUser: Broadcasted join for "..player.Name)
+    end)
+    disagreeBtn.MouseButton1Click:Connect(function()
+        getgenv().__CH_DATA = nil
+        gui:Destroy()
+        print("Consent: User disagreed, script destroyed")
+    end)
+end
+showConsentPopup()
+
+-- Notify when user leaves
+Players.PlayerRemoving:Connect(function(leavingPlayer)
+    if leavingPlayer.Name == player.Name then
+        scriptUser:FireAllClients(player.Name, "leave")
+        print("ScriptUser: Broadcasted leave for "..player.Name)
+    end
+end)
 
 local frame = Instance.new("Frame")
 frame.Size = UDim2.new(0, 180, 0, 150)
@@ -130,11 +219,11 @@ frame.BorderSizePixel = 0
 frame.Parent = gui
 
 local uicorner = Instance.new("UICorner")
-uicorner.CornerRadius = UDim.new(0,10)
+uicorner.CornerRadius = UDim.new(0, 10)
 uicorner.Parent = frame
 
 local gradient = Instance.new("UIGradient")
-gradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(120,0,150)), ColorSequenceKeypoint.new(1, Color3.fromRGB(200,100,255))}
+gradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 0, 150)), ColorSequenceKeypoint.new(1, Color3.fromRGB(200, 100, 255))}
 gradient.Rotation = 45
 gradient.Parent = frame
 
@@ -170,11 +259,11 @@ game:GetService("UserInputService").InputChanged:Connect(function(input)
 end)
 
 local toggleBtn = Instance.new("TextButton")
-toggleBtn.Size = UDim2.new(0,35,0,35)
-toggleBtn.Position = UDim2.new(1,5,0,-5)
+toggleBtn.Size = UDim2.new(0, 35, 0, 35)
+toggleBtn.Position = UDim2.new(1, 5, 0, -5)
 toggleBtn.Text = "❌"
-toggleBtn.BackgroundColor3 = Color3.fromRGB(200,0,0)
-toggleBtn.TextColor3 = Color3.new(1,1,1)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+toggleBtn.TextColor3 = Color3.new(1, 1, 1)
 toggleBtn.Font = Enum.Font.GothamBold
 toggleBtn.TextScaled = true
 toggleBtn.Parent = frame
@@ -188,9 +277,9 @@ end)
 
 local label = Instance.new("TextLabel")
 label.Size = UDim2.new(1, -20, 0, 18)
-label.Position = UDim2.new(0,10,0,10)
+label.Position = UDim2.new(0, 10, 0, 10)
 label.Text = "Engine"
-label.TextColor3 = Color3.new(1,1,1)
+label.TextColor3 = Color3.new(1, 1, 1)
 label.BackgroundTransparency = 1
 label.Font = Enum.Font.GothamBold
 label.TextScaled = true
@@ -198,22 +287,22 @@ label.Parent = frame
 
 local dropdown = Instance.new("TextButton")
 dropdown.Size = UDim2.new(1, -20, 0, 25)
-dropdown.Position = UDim2.new(0,10,0,30)
-dropdown.TextColor3 = Color3.new(1,1,1)
+dropdown.Position = UDim2.new(0, 10, 0, 30)
+dropdown.TextColor3 = Color3.new(1, 1, 1)
 dropdown.Font = Enum.Font.Gotham
 dropdown.TextScaled = true
 dropdown.Text = getgenv().__CH_DATA.config.engine
 dropdown.Parent = frame
 
 local dropdownGradient = Instance.new("UIGradient")
-dropdownGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(150,0,200)), ColorSequenceKeypoint.new(1, Color3.fromRGB(220,150,255))}
+dropdownGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 0, 200)), ColorSequenceKeypoint.new(1, Color3.fromRGB(220, 150, 255))}
 dropdownGradient.Rotation = 45
 dropdownGradient.Parent = dropdown
 
 local dropdownFrame = Instance.new("Frame")
-dropdownFrame.AnchorPoint = Vector2.new(0,1)
-dropdownFrame.Position = UDim2.new(0,0,0,0)
-dropdownFrame.Size = UDim2.new(1,0,0,0)
+dropdownFrame.AnchorPoint = Vector2.new(0, 1)
+dropdownFrame.Position = UDim2.new(0, 0, 0, 0)
+dropdownFrame.Size = UDim2.new(1, 0, 0, 0)
 dropdownFrame.BackgroundTransparency = 1
 dropdownFrame.Parent = dropdown
 dropdownFrame.ClipsDescendants = true
@@ -222,45 +311,45 @@ local layout = Instance.new("UIListLayout")
 layout.Parent = dropdownFrame
 layout.SortOrder = Enum.SortOrder.LayoutOrder
 
-for _,eng in ipairs(getgenv().__CH_DATA.engines) do
+for _, eng in ipairs(getgenv().__CH_DATA.engines) do
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1,0,0,20)
+    btn.Size = UDim2.new(1, 0, 0, 20)
     btn.Text = eng
     btn.Font = Enum.Font.Gotham
     btn.TextScaled = true
-    btn.TextColor3 = Color3.new(1,1,1)
-    btn.BackgroundColor3 = Color3.fromRGB(100,0,150)
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.BackgroundColor3 = Color3.fromRGB(100, 0, 150)
     btn.Parent = dropdownFrame
 
     local btnGradient = Instance.new("UIGradient")
-    btnGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(120,0,200)), ColorSequenceKeypoint.new(1, Color3.fromRGB(200,100,255))}
+    btnGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 0, 200)), ColorSequenceKeypoint.new(1, Color3.fromRGB(200, 100, 255))}
     btnGradient.Rotation = 45
     btnGradient.Parent = btn
 
     btn.MouseButton1Click:Connect(function()
         getgenv().__CH_DATA.config.engine = eng
         dropdown.Text = eng
-        dropdownFrame:TweenSize(UDim2.new(1,0,0,0), "Out", "Quad", 0.2, true)
+        dropdownFrame:TweenSize(UDim2.new(1, 0, 0, 0), "Out", "Quad", 0.2, true)
     end)
 end
 
 dropdown.MouseButton1Click:Connect(function()
     local isOpen = dropdownFrame.Size.Y.Offset == 0
-    local targetHeight = isOpen and (#getgenv().__CH_DATA.engines*20) or 0
-    dropdownFrame:TweenSize(UDim2.new(1,0,0,targetHeight), "Out", "Quad", 0.2, true)
+    local targetHeight = isOpen and (#getgenv().__CH_DATA.engines * 20) or 0
+    dropdownFrame:TweenSize(UDim2.new(1, 0, 0, targetHeight), "Out", "Quad", 0.2, true)
 end)
 
 local playBtn = Instance.new("TextButton")
 playBtn.Size = UDim2.new(1, -20, 0, 30)
-playBtn.Position = UDim2.new(0,10,0,65)
+playBtn.Position = UDim2.new(0, 10, 0, 65)
 playBtn.Text = "Play Best Move"
-playBtn.TextColor3 = Color3.new(1,1,1)
+playBtn.TextColor3 = Color3.new(1, 1, 1)
 playBtn.Font = Enum.Font.GothamBold
 playBtn.TextScaled = true
 playBtn.Parent = frame
 
 local playGradient = Instance.new("UIGradient")
-playGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(150,0,200)), ColorSequenceKeypoint.new(1, Color3.fromRGB(220,150,255))}
+playGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 0, 200)), ColorSequenceKeypoint.new(1, Color3.fromRGB(220, 150, 255))}
 playGradient.Rotation = 45
 playGradient.Parent = playBtn
 
@@ -270,22 +359,22 @@ end)
 
 local autoPlayBtn = Instance.new("TextButton")
 autoPlayBtn.Size = UDim2.new(1, -20, 0, 30)
-autoPlayBtn.Position = UDim2.new(0,10,0,100)
+autoPlayBtn.Position = UDim2.new(0, 10, 0, 100)
 autoPlayBtn.Text = "Auto Play: OFF"
-autoPlayBtn.TextColor3 = Color3.new(1,1,1)
+autoPlayBtn.TextColor3 = Color3.new(1, 1, 1)
 autoPlayBtn.Font = Enum.Font.GothamBold
 autoPlayBtn.TextScaled = true
 autoPlayBtn.Parent = frame
 
 local autoPlayGradient = Instance.new("UIGradient")
-autoPlayGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(150,0,200)), ColorSequenceKeypoint.new(1, Color3.fromRGB(220,150,255))}
+autoPlayGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 0, 200)), ColorSequenceKeypoint.new(1, Color3.fromRGB(220, 150, 255))}
 autoPlayGradient.Rotation = 45
 autoPlayGradient.Parent = autoPlayBtn
 
 autoPlayBtn.MouseButton1Click:Connect(function()
     getgenv().__CH_DATA.config.autoPlay = not getgenv().__CH_DATA.config.autoPlay
     autoPlayBtn.Text = "Auto Play: " .. (getgenv().__CH_DATA.config.autoPlay and "ON" or "OFF")
-    autoPlayBtn.BackgroundColor3 = getgenv().__CH_DATA.config.autoPlay and Color3.fromRGB(0,150,0) or Color3.fromRGB(150,0,200)
+    autoPlayBtn.BackgroundColor3 = getgenv().__CH_DATA.config.autoPlay and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(150, 0, 200)
     if getgenv().__CH_DATA.config.autoPlay then
         startAutoPlay()
     else
@@ -293,3 +382,14 @@ autoPlayBtn.MouseButton1Click:Connect(function()
         print("AutoPlay: Manually stopped via button")
     end
 end)
+
+-- Warning label for owner controls
+local warningLabel = Instance.new("TextLabel")
+warningLabel.Size = UDim2.new(1, -20, 0, 20)
+warningLabel.Position = UDim2.new(0, 10, 0, 110)
+warningLabel.Text = "Owners may disable/destroy script"
+warningLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+warningLabel.BackgroundTransparency = 1
+warningLabel.Font = Enum.Font.Gotham
+warningLabel.TextScaled = true
+warningLabel.Parent = frame
