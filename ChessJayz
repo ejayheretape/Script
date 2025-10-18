@@ -5,7 +5,7 @@ local TweenService = game:GetService("TweenService")
 
 getgenv().__CH_DATA = getgenv().__CH_DATA or {
     engines = {"Stockfish","Lc0","Torch","Dx100","KnightX","HyperX","Br1lliance","Undefeated"},
-    config = {engine="Stockfish"}
+    config = {engine="Stockfish", autoPlay=false}
 }
 
 local function fetchFEN()
@@ -50,13 +50,26 @@ local function PlayBestMove()
     end
 end
 
+local autoPlayRunning = false
+local function startAutoPlay()
+    if autoPlayRunning then return end
+    autoPlayRunning = true
+    spawn(function()
+        while getgenv().__CH_DATA.config.autoPlay and autoPlayRunning do
+            PlayBestMove()
+            task.wait(1)
+        end
+        autoPlayRunning = false
+    end)
+end
+
 local player = Players.LocalPlayer
 local gui = Instance.new("ScreenGui")
 gui.Parent = player:WaitForChild("PlayerGui")
 gui.ResetOnSpawn = false
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 180, 0, 120)
+frame.Size = UDim2.new(0, 180, 0, 150)
 frame.Position = UDim2.new(0.7, 0, 0.2, 0)
 frame.BorderSizePixel = 0
 frame.Parent = gui
@@ -198,4 +211,27 @@ playGradient.Parent = playBtn
 
 playBtn.MouseButton1Click:Connect(function()
     PlayBestMove()
+end)
+
+local autoPlayBtn = Instance.new("TextButton")
+autoPlayBtn.Size = UDim2.new(1, -20, 0, 30)
+autoPlayBtn.Position = UDim2.new(0,10,0,100)
+autoPlayBtn.Text = "Auto Play: OFF"
+autoPlayBtn.TextColor3 = Color3.new(1,1,1)
+autoPlayBtn.Font = Enum.Font.GothamBold
+autoPlayBtn.TextScaled = true
+autoPlayBtn.Parent = frame
+
+local autoPlayGradient = Instance.new("UIGradient")
+autoPlayGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(150,0,200)), ColorSequenceKeypoint.new(1, Color3.fromRGB(220,150,255))}
+autoPlayGradient.Rotation = 45
+autoPlayGradient.Parent = autoPlayBtn
+
+autoPlayBtn.MouseButton1Click:Connect(function()
+    getgenv().__CH_DATA.config.autoPlay = not getgenv().__CH_DATA.config.autoPlay
+    autoPlayBtn.Text = "Auto Play: " .. (getgenv().__CH_DATA.config.autoPlay and "ON" or "OFF")
+    autoPlayBtn.BackgroundColor3 = getgenv().__CH_DATA.config.autoPlay and Color3.fromRGB(0,150,0) or Color3.fromRGB(150,0,200)
+    if getgenv().__CH_DATA.config.autoPlay then
+        startAutoPlay()
+    end
 end)
