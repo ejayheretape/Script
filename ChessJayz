@@ -4,65 +4,120 @@ local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 
 getgenv().__CH_DATA = getgenv().__CH_DATA or {
-    engines = {"Stockfish","Lc0","Torch","Dx100","KnightX","HyperX","Br1lliance","Undefeated"},
+    engines = {"Stockfish","Lc0","Torch","Dx100","KnightX","HyperX","Br1lliance","Undefeated","WurstEngine"},
     config = {engine="Stockfish", autoPlay=false}
 }
 
 local function fetchFEN()
     local ev = RS:FindFirstChild("InternalClientEvents")
-    if not ev then return nil end
+    if not ev then warn("fetchFEN: InternalClientEvents not found") return nil end
     local ok, active = pcall(function() return ev.GetActiveTableset:Invoke() end)
-    if not ok or not active then return nil end
+    if not ok or not active then warn("fetchFEN: Failed to get active tableset, ok="..tostring(ok)) return nil end
     for i=1,5 do
         local fenobj = active:FindFirstChild("FEN")
         if fenobj then return fenobj.Value end
         task.wait(0.1)
     end
+    warn("fetchFEN: FEN object not found after retries")
     return nil
 end
 
-local function queryWebEngine(fen)
-    local ok,res = pcall(function()
-        return (syn and syn.request or http_request or request)({
-            Url = "https://chess-api.com/v1",
-            Method = "POST",
-            Headers = {["Content-Type"]="application/json"},
-            Body = HttpService:JSONEncode({fen=fen})
-        })
-    end)
-    if not ok or not res or not res.Body then return nil end
-    local ok2,data = pcall(function() return HttpService:JSONDecode(res.Body) end)
-    if not ok2 or not data then return nil end
-    if data.from and data.to then return data.from, data.to end
+local function queryWebEngine(fen, engine)
+    local body = {fen=fen}
+    local isWurst = engine == "WurstEngine"
+    if isWurst then
+        body.depth = 18
+        body.maxThinkingTime = 100
+        body.variants = 5
+    end
+    local attempts = 5  -- Increased retries for long sessions
+    local res
+    for i=1,attempts do
+        local ok, result = pcall(function()
+            return (syn and syn.request or http_request or request)({
+                Url = "https://chess-api.com/v1",
+                Method = "POST",
+                Headers = {["Content-Type"]="application/json"},
+                Body = HttpService:JSONEncode(body)
+            })
+        end)
+        if ok and result and result.Body then
+            res = result
+            break
+        end
+        warn("queryWebEngine: Attempt "..i.." failed, ok="..tostring(ok)..", result="..tostring(result))
+        task.wait(1)  -- Increased delay to respect potential undocumented rate limits
+    end
+    if not res or not res.Body then warn("queryWebEngine: All attempts failed") return nil end
+    local ok2, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+    if not ok2 or not data then warn("queryWebEngine: JSON decode failed, ok2="..tostring(ok2)) return nil end
+    local recommendations = data.recommendations or {data}
+    if #recommendations == 0 then warn("queryWebEngine: No recommendations") return nil end
+    local selected = recommendations[1]
+    if isWurst then
+        for _, rec in ipairs(recommendations) do
+            if rec.isCapture then
+                selected = rec
+                break
+            end
+        end
+    end
+    if selected.from and selected.to then return selected.from, selected.to end
+    warn("queryWebEngine: Invalid move data")
     return nil
 end
 
 local function computeMove()
     local fen
-    repeat task.wait(0.05) fen = fetchFEN() until fen
-    return queryWebEngine(fen)
+    local attempts = 10  -- Increased for longer waits between games
+    for i=1,attempts do
+        fen = fetchFEN()
+        if fen then break end
+        warn("computeMove: FEN fetch failed, attempt "..i)
+        task.wait(0.5)  -- Increased delay to handle game transitions
+    end
+    if not fen then warn("computeMove: No FEN after retries - possibly no active game") return nil end
+    local engine = getgenv().__CH_DATA.config.engine
+    return queryWebEngine(fen, engine)
 end
 
 local function PlayBestMove()
-    local f,t = computeMove()
+    local f, t = computeMove()
     if f and RS:FindFirstChild("Chess") then
-        pcall(function() RS.Chess.SubmitMove:InvokeServer(f..t) end)
+        local ok, err = pcall(function() RS.Chess.SubmitMove:InvokeServer(f..t) end)
+        if not ok then warn("PlayBestMove: SubmitMove failed, error="..tostring(err)) end
+    else
+        warn("PlayBestMove: Invalid move or Chess service missing, f="..tostring(f))
     end
 end
 
 local autoPlayRunning = false
+local matchCount = 0
 local function startAutoPlay()
-    if autoPlayRunning then return end
+    if autoPlayRunning then warn("startAutoPlay: Already running") return end
     autoPlayRunning = true
+    matchCount = 0
     spawn(function()
         while getgenv().__CH_DATA.config.autoPlay and autoPlayRunning do
-            PlayBestMove()
-            task.wait(1)
+            local success, err = pcall(function()
+                PlayBestMove()
+                matchCount = matchCount + 1
+                print("AutoPlay: Completed move for match #"..matchCount)
+            end)
+            if not success then
+                warn("AutoPlay: Error in move execution, err="..tostring(err))
+                if matchCount >= 6 then
+                    warn("AutoPlay: Passed 6 matches, continuing to monitor")
+                end
+            end
+            task.wait(2)  -- Increased delay to 2 seconds for sustainability over 1000 matches
         end
         autoPlayRunning = false
+        print("AutoPlay: Stopped, final match count="..matchCount)
     end)
 end
 
+-- GUI code remains the same as before
 local player = Players.LocalPlayer
 local gui = Instance.new("ScreenGui")
 gui.Parent = player:WaitForChild("PlayerGui")
@@ -233,5 +288,8 @@ autoPlayBtn.MouseButton1Click:Connect(function()
     autoPlayBtn.BackgroundColor3 = getgenv().__CH_DATA.config.autoPlay and Color3.fromRGB(0,150,0) or Color3.fromRGB(150,0,200)
     if getgenv().__CH_DATA.config.autoPlay then
         startAutoPlay()
+    else
+        autoPlayRunning = false
+        print("AutoPlay: Manually stopped via button")
     end
 end)
