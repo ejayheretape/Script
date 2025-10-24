@@ -1,0 +1,159 @@
+local ws = game:GetService("Workspace")
+local plrs = game:GetService("Players")
+local http = game:GetService("HttpService")
+local cg = game:GetService("CoreGui")
+
+local me = plrs.LocalPlayer
+local req = http_request or request or (syn and syn.request) or (fluxus and fluxus.request) or (krnl and krnl.request)
+local api = "https://stockfish.online/api/s/v2.php"
+local depth = 15
+
+-- find chess board
+local function getBoard()
+	for _,v in pairs(ws:GetChildren()) do
+		if v.Name == "ChessTableset" and (v.WhitePlayer.Value == me.Name or v.BlackPlayer.Value == me.Name) then
+			return v
+		end
+	end
+end
+
+local function getFEN()
+	local b = getBoard()
+	return b and b:FindFirstChild("FEN") and b.FEN.Value
+end
+
+local function getColor()
+	local b = getBoard()
+	if not b then return end
+	return b.WhitePlayer.Value == me.Name and "White" or "Black"
+end
+
+-- convert uci move
+local function toAlgebraic(move, fen)
+	if not move or #move < 4 then return move end
+	local from, to = move:sub(1,2), move:sub(3,4)
+	local board, rows = {}, fen:split(" ")[1]:split("/")
+
+	for r=1,8 do
+		local c = 1
+		for ch in rows[r]:gmatch(".") do
+			if tonumber(ch) then
+				c += tonumber(ch)
+			else
+				board[string.char(96+c)..tostring(9-r)] = ch
+				c += 1
+			end
+		end
+	end
+
+	local p = board[from]
+	if not p then return move end
+	local sym = ({n="N",b="B",r="R",q="Q",k="K"})[p:lower()] or ""
+	if sym == "" and board[to] then sym = from:sub(1,1) end
+	local cap = board[to] and "x" or ""
+	if move=="e1g1" or move=="e8g8" then return "O-O" end
+	if move=="e1c1" or move=="e8c8" then return "O-O-O" end
+	return sym..cap..to
+end
+
+-- ui
+local gui = Instance.new("ScreenGui", cg)
+gui.Name = "BestMoveUI"
+gui.ResetOnSpawn = false
+
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0,240,0,80)
+frame.Position = UDim2.new(0.5,-120,0.1,0)
+frame.BackgroundColor3 = Color3.fromRGB(25,25,25)
+frame.BackgroundTransparency = 0.15
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0,10)
+local stroke = Instance.new("UIStroke", frame)
+stroke.Thickness = 1.3
+stroke.Color = Color3.fromRGB(90,90,90)
+
+local label = Instance.new("TextLabel", frame)
+label.Size = UDim2.new(1,0,0.6,0)
+label.BackgroundTransparency = 1
+label.TextColor3 = Color3.fromRGB(255,255,255)
+label.Font = Enum.Font.GothamBold
+label.TextScaled = true
+label.Text = "Waiting for match..."
+
+local btn = Instance.new("TextButton", frame)
+btn.Size = UDim2.new(0.9,0,0.3,0)
+btn.Position = UDim2.new(0.05,0,0.65,0)
+btn.BackgroundColor3 = Color3.fromRGB(45,45,45)
+btn.TextColor3 = Color3.fromRGB(180,180,255)
+btn.Font = Enum.Font.GothamBold
+btn.TextScaled = true
+btn.Text = "Refresh"
+Instance.new("UICorner", btn).CornerRadius = UDim.new(0,6)
+
+frame.Active = true
+frame.Draggable = true
+
+-- main logic
+local lastFEN, board = nil, nil
+local forceRefresh = false
+
+ws.ChildAdded:Connect(function(c)
+	if c.Name == "ChessTableset" then
+		task.wait(2)
+		if c:FindFirstChild("WhitePlayer") and (c.WhitePlayer.Value==me.Name or c.BlackPlayer.Value==me.Name) then
+			label.Text = "New match!"
+			board,lastFEN = c,nil
+		end
+	end
+end)
+
+ws.ChildRemoved:Connect(function(c)
+	if c==board then
+		label.Text = "Match ended"
+		board,lastFEN = nil,nil
+	end
+end)
+
+btn.MouseButton1Click:Connect(function()
+	forceRefresh = true
+	label.Text = "Refreshing..."
+end)
+
+task.spawn(function()
+	while task.wait(2) do
+		board = getBoard()
+		if not board then
+			label.Text = "Waiting for match..."
+			lastFEN=nil
+			continue
+		end
+
+		local fen = getFEN()
+		if not fen then continue end
+		local color = getColor()
+		local turn = fen:find(" w ") and "White" or "Black"
+
+		-- only re-analyze if FEN changed or refresh forced
+		if (fen ~= lastFEN) or forceRefresh then
+			lastFEN, forceRefresh = fen, false
+
+			if turn ~= color then
+				label.Text = "Opponent's turn"
+				continue
+			end
+
+			label.Text = "Analyzing..."
+			local res = req({
+				Url = api.."?fen="..http:UrlEncode(fen).."&depth="..depth,
+				Method = "GET"
+			})
+
+			local body = res and (res.Body or res.body)
+			if not body or body=="" then label.Text="API Error" continue end
+			local ok,data = pcall(function() return http:JSONDecode(body) end)
+			if not ok or not data or not data.success then continue end
+
+			local move = data.bestmove and data.bestmove:match("([a-h][1-8][a-h][1-8][qrbn]?)")
+			label.Text = move and ("Best Move: "..toAlgebraic(move,fen)) or "No move found"
+		end
+	end
+end)
