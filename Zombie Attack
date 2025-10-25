@@ -62,7 +62,7 @@ mainGrad.Rotation = 270
 
 local active = false
 local orbitRadius = 10
-local orbitHeight = 8
+local orbitHeight = 11
 local orbitSpeed = 4
 local hitboxSize = 7
 
@@ -132,6 +132,60 @@ task.spawn(function()
                         pcall(function() tool.Parent = lp.Character end)
                         break
                     end
+                end
+            end
+        end
+    end
+end)
+
+local angle = 0
+task.spawn(function()
+    while true do
+        if active and lp.Character then
+            local target = getNearest()
+            if target and target:FindFirstChild("HumanoidRootPart") and target:FindFirstChild("Head") then
+                angle = angle + orbitSpeed * 0.03
+                local cx, cz = math.cos(angle) * orbitRadius, math.sin(angle) * orbitRadius
+                local pos = target.HumanoidRootPart.Position + Vector3.new(cx, orbitHeight, cz)
+                pcall(function()
+                    lp.Character.HumanoidRootPart.CFrame = CFrame.new(pos, target.Head.Position)
+                end)
+            end
+        end
+        task.wait(0.03)
+    end
+end)
+
+task.spawn(function()
+    while true do
+        if active and lp.Character and lp.Character:FindFirstChildOfClass("Tool") then
+            local target = getNearest()
+            if target and target:FindFirstChild("Head") and ReplicatedStorage:FindFirstChild("Gun") then
+                pcall(function()
+                    ReplicatedStorage.Gun:FireServer({
+                        Direction = target.Head.Position,
+                        Name = lp.Character:FindFirstChildOfClass("Tool").Name,
+                        Hit = target.Head,
+                        Origin = target.Head.Position,
+                        Pos = target.Head.Position
+                    })
+                end)
+            end
+        end
+        task.wait(0.05)
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if active then
+        local t = getNearest()
+        if t and t:FindFirstChild("Head") then
+            pcall(function()
+                cam.CFrame = CFrame.new(cam.CFrame.Position, t.Head.Position)
+            end)
+        end
+    end
+end)                    end
                 end
             end
         end
