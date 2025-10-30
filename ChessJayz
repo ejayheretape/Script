@@ -3,6 +3,33 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 
+local function httpRequest(options)
+    local success, response = pcall(function()
+        if syn and syn.request then
+            return syn.request(options)
+        elseif http_request then
+            return http_request(options)
+        elseif request then
+            return request(options)
+        elseif HttpService then
+            if options.Method == "POST" then
+                local body = HttpService:PostAsync(options.Url, options.Body, Enum.HttpContentType.ApplicationJson)
+                return {Success = true, StatusCode = 200, Body = body, Headers = {}}
+            elseif options.Method == "GET" then
+                local body = HttpService:GetAsync(options.Url)
+                return {Success = true, StatusCode = 200, Body = body, Headers = {}}
+            end
+        end
+        return nil
+    end)
+    if success and response then
+        return response
+    else
+        warn("HTTP Request failed: " .. tostring(response))
+        return nil
+    end
+end
+
 getgenv().__CH_DATA = getgenv().__CH_DATA or {
     engines = {"Stockfish","Lc0","Torch","Dx100","KnightX","HyperX","Br1lliance","Undefeated","WurstEngine","HumanEngine"},
     config = {engine="Stockfish", autoPlay=false, autoMatch=false, autoMatchMode="Blitz"}
@@ -97,7 +124,7 @@ local function fetchFEN()
     local attempts = 5
     local ev = ReplicatedStorage:FindFirstChild("InternalClientEvents")
     if ev then
-        local ok, active = pcall(function() return ev.GetActiveTableset:Invoke() end)
+        local ok, active = pcall(function() return ev.GetActiveTableset:InvokeServer() end)
         if ok and active then
             for i = 1, attempts do
                 local fenobj = active:FindFirstChild("FEN")
@@ -159,7 +186,7 @@ local function queryWebEngine(fen, engine)
     local res
     for i=1,attempts do
         local ok, result = pcall(function()
-            return (syn and syn.request or http_request or request)({
+            return httpRequest({
                 Url = "https://chess-api.com/v1",
                 Method = "POST",
                 Headers = {["Content-Type"]="application/json"},
@@ -266,7 +293,7 @@ local function startAutoMatch()
             if internalEvents then
                 local StartMatch = internalEvents:FindFirstChild("StartRankedMatch")
                 if StartMatch then
-                    StartMatch:Fire()
+                    pcall(function() StartMatch:FireServer() end)
                 else
                     StartMatch = internalEvents:FindFirstChild("StartMatch")
                     if StartMatch then
@@ -281,7 +308,7 @@ local function startAutoMatch()
                                 end
                             end
                         end
-                        StartMatch:Fire({ranked = true})
+                        pcall(function() StartMatch:FireServer({ranked = true}) end)
                     end
                 end
             end
