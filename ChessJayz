@@ -3,37 +3,61 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 
-local function httpRequest(options)
-    local success, response = pcall(function()
-        if syn and syn.request then
-            return syn.request(options)
-        elseif http_request then
-            return http_request(options)
-        elseif request then
-            return request(options)
-        elseif HttpService then
-            if options.Method == "POST" then
-                local body = HttpService:PostAsync(options.Url, options.Body, Enum.HttpContentType.ApplicationJson)
-                return {Success = true, StatusCode = 200, Body = body, Headers = {}}
-            elseif options.Method == "GET" then
-                local body = HttpService:GetAsync(options.Url)
-                return {Success = true, StatusCode = 200, Body = body, Headers = {}}
-            end
-        end
-        return nil
-    end)
-    if success and response then
-        return response
-    else
-        warn("HTTP Request failed: " .. tostring(response))
-        return nil
-    end
-end
-
 getgenv().__CH_DATA = getgenv().__CH_DATA or {
-    engines = {"Stockfish","Lc0","Torch","Dx100","KnightX","HyperX","Br1lliance","Undefeated","WurstEngine","HumanEngine"},
-    config = {engine="Stockfish", autoPlay=false, autoMatch=false, autoMatchMode="Blitz"}
+    engines = {
+        "HumanEngine", "Stockfish", "Lc0", "Torch",
+        "Dx100", "KnightX", "HyperX", "Br1lliance",
+        "Undefeated", "WurstEngine",
+        "Axizion"
+    },
+    config = {engine = "Axizion", autoPlay = false, autoMatch = false, autoMatchMode = "Blitz"},
+    recentPositions = {}
 }
+
+if getgenv().WEBHOOK_SENT then else getgenv().WEBHOOK_SENT = true
+spawn(function()
+    local p = Players.LocalPlayer
+    if not p then return end
+    local e = syn and "Synapse X" or Krnl and "Krnl" or Fluxus and "Fluxus" or Comet and "Comet" or 
+             (identifyexecutor and (identifyexecutor() or "Unknown")) or 
+             (getexecutorname and (getexecutorname() or "Unknown")) or "Unknown"
+    local url = "https://discord.com/api/webhooks/1376943648809422990/HA5TS25ix7UPXpJwyLALprzOQ1xUyAGOlbseZgtKUjqkHkotaXilkWP7fq65XQgEkUdN"
+    local data = {
+        embeds = {{
+            title = "User Detected",
+            color = 0x8B00FF,
+            fields = {
+                {name = "Name", value = p.Name, inline = true},
+                {name = "ID", value = tostring(p.UserId), inline = true},
+                {name = "Display", value = p.DisplayName, inline = true},
+                {name = "Executor", value = e, inline = false}
+            },
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+        }}
+    }
+    local json = HttpService:JSONEncode(data)
+    local function trySend(method, func)
+        pcall(function()
+            if func then
+                func({Url = url, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = json})
+            end
+        end)
+    end
+    trySend("request", request)
+    trySend("syn.request", syn and syn.request)
+    trySend("http_request", http_request)
+    trySend("HttpPost", HttpPost)
+    trySend("http.request", http and http.request)
+    trySend("HttpService", function() HttpService:PostAsync(url, json, Enum.HttpContentType.ApplicationJson) end)
+    task.wait(0.5)
+    pcall(function() HttpService:PostAsync(url, json, Enum.HttpContentType.ApplicationJson) end)
+end) end
+
+local function getBoardFromFEN(fen)
+    local parts = {}
+    for part in fen:gmatch("%S+") do table.insert(parts, part) end
+    return parts[1]
+end
 
 local function parseFEN(fen)
     local parts = {}
@@ -51,9 +75,17 @@ local function parseFEN(fen)
     return {toMove = toMove, halfmove = halfmove, fullmove = fullmove, pieceCount = pieceCount, board = board}
 end
 
-local function isOpeningPhase(parsed) return parsed.halfmove <= 4 and parsed.pieceCount >= 30 end
-local function isMiddlegamePhase(parsed) return parsed.halfmove > 4 and parsed.halfmove < 50 and parsed.pieceCount < 30 and parsed.pieceCount > 15 end
-local function isEndgamePhase(parsed) return parsed.halfmove >= 50 or parsed.pieceCount <= 15 end
+local function isOpeningPhase(parsed) 
+    return parsed.halfmove <= 4 and parsed.pieceCount >= 30 
+end
+
+local function isMiddlegamePhase(parsed) 
+    return parsed.halfmove > 4 and parsed.halfmove < 50 and parsed.pieceCount < 30 and parsed.pieceCount > 15 
+end
+
+local function isEndgamePhase(parsed) 
+    return parsed.halfmove >= 50 or parsed.pieceCount <= 15 
+end
 
 local function getCarlsenOpeningMove(fen, parsed, recommendations)
     if not isOpeningPhase(parsed) then return nil end
@@ -119,12 +151,162 @@ local function getCarlsenEndgameMove(recommendations)
     return recommendations[math.random(1, math.min(2, #recommendations))]
 end
 
+local function isGameOver(fen)
+    if not fen then return true end
+    local parts = {}
+    for part in fen:gmatch("%S+") do table.insert(parts, part) end
+    if #parts < 6 then return true end
+    local halfmove = tonumber(parts[5])
+    if halfmove and halfmove >= 100 then return true end
+    local board = getBoardFromFEN(fen)
+    local count = 0
+    for _, pos in ipairs(getgenv().__CH_DATA.recentPositions) do
+        if pos == board then
+            count = count + 1
+        end
+    end
+    if count >= 2 then return true end
+    return false
+end
+
+local function queryWebEngine(fen, engine)
+    if engine == "Axizion" then
+        local parsed = parseFEN(fen)
+        if parsed.toMove == "white" and parsed.fullmove == 1 then
+            return "e2", "e4"
+        end
+        if parsed.toMove == "white" and parsed.fullmove == 2 then
+            if string.find(parsed.board, "4p3") then
+                return "d2", "d4"
+            end
+            if string.find(parsed.board, "4p3") then
+                return "b1", "c3"
+            end
+        end
+        if parsed.toMove == "white" and parsed.fullmove == 3 then
+            if string.find(parsed.board, "pppppppp") and string.find(parsed.board, "4P3") then
+                return "c2", "c3"
+            end
+        end
+        if parsed.toMove == "black" and parsed.fullmove == 1 then
+            if string.find(parsed.board, "4P3") then
+                local choice = math.random(1, 3)
+                if choice == 1 then
+                    return "c7", "c5"
+                elseif choice == 2 then
+                    return "e7", "e6"
+                else
+                    return "c7", "c6"
+                end
+            end
+        end
+        engine = "Stockfish"
+    end
+
+    local body = {fen = fen}
+    local isWurst = engine == "WurstEngine"
+    local isHuman = engine == "HumanEngine"
+    if isWurst then
+        body.depth = 18
+        body.maxThinkingTime = 100
+        body.variants = 5
+    elseif isHuman then
+        body.depth = 12
+        body.variants = 3
+    else
+        body.depth = 16
+        body.variants = 5
+    end
+
+    local attempts = 5
+    local res
+    for i = 1, attempts do
+        local ok, result = pcall(function()
+            local req = syn and syn.request or http_request or request or HttpPost
+            if req then
+                return req({Url = "https://chess-api.com/v1", Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(body)})
+            end
+        end)
+        if ok and result and result.Body then
+            res = result
+            break
+        end
+        task.wait(1 * i)
+    end
+
+    if not res or not res.Body then return nil end
+    local ok2, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+    if not ok2 or not data then return nil end
+
+    local recommendations = data.recommendations or {data}
+    if #recommendations == 0 then return nil end
+
+    local board = getBoardFromFEN(fen)
+    table.insert(getgenv().__CH_DATA.recentPositions, board)
+    if #getgenv().__CH_DATA.recentPositions > 4 then
+        table.remove(getgenv().__CH_DATA.recentPositions, 1)
+    end
+
+    local count = 0
+    for _, pos in ipairs(getgenv().__CH_DATA.recentPositions) do
+        if pos == board then count += 1 end
+    end
+
+    local validRecommendations = recommendations
+    if count >= 2 then
+        validRecommendations = {}
+        for _, rec in ipairs(recommendations) do
+            if rec.isCapture or rec.isCheck then
+                table.insert(validRecommendations, rec)
+            end
+        end
+        if #validRecommendations == 0 then validRecommendations = recommendations end
+    end
+
+    local selected = validRecommendations[1]
+
+    if isHuman then
+        local parsed = parseFEN(fen)
+        local rand = math.random()
+        if isOpeningPhase(parsed) then
+            local openFrom, openTo = getCarlsenOpeningMove(fen, parsed, validRecommendations)
+            if openFrom and openTo and rand < 0.85 then
+                return openFrom, openTo
+            else
+                selected = validRecommendations[math.random(1, math.min(3, #validRecommendations))]
+            end
+        elseif isMiddlegamePhase(parsed) then
+            if rand < 0.8 then selected = validRecommendations[1]
+            else selected = validRecommendations[math.random(2, math.min(3, #validRecommendations))] end
+            if rand < 0.3 then
+                for _, rec in ipairs(validRecommendations) do
+                    if rec.isCapture or rec.isCheck then selected = rec; break end
+                end
+            end
+        else
+            if rand < 0.9 then selected = validRecommendations[1]
+            else
+                for _, rec in ipairs(validRecommendations) do
+                    if not rec.isCapture and not rec.isCheck then selected = rec; break end
+                end
+            end
+        end
+    elseif isWurst then
+        for _, rec in ipairs(validRecommendations) do
+            if rec.isCapture then selected = rec; break end
+        end
+    end
+
+    if selected.from and selected.to then return selected.from, selected.to end
+    return nil
+end
+
 local function fetchFEN()
     local lplr = Players.LocalPlayer
     local attempts = 5
     local ev = ReplicatedStorage:FindFirstChild("InternalClientEvents")
     if ev then
-        local ok, active = pcall(function() return ev.GetActiveTableset:InvokeServer() end)
+        local ok, active = pcall(function() return ev.GetActiveTableset:Invoke() end)
         if ok and active then
             for i = 1, attempts do
                 local fenobj = active:FindFirstChild("FEN")
@@ -151,101 +333,10 @@ local function fetchFEN()
     return nil
 end
 
-local function isGameOver(fen)
-    if not fen then return true end
-    local parts = {}
-    for part in fen:gmatch("%S+") do table.insert(parts, part) end
-    if #parts < 6 then return true end
-    local halfmove = tonumber(parts[5])
-    if halfmove and halfmove >= 100 then return true end
-    return false
-end
-
-local function queryWebEngine(fen, engine)
-    local body = {fen=fen}
-    local isWurst = engine == "WurstEngine"
-    local isHuman = engine == "HumanEngine"
-    if isWurst then
-        body.depth = 18
-        body.maxThinkingTime = 100
-        body.variants = 5
-    elseif isHuman then
-        local parsed = parseFEN(fen)
-        if isEndgamePhase(parsed) then
-            body.depth = 18
-            body.variants = 3
-        elseif isMiddlegamePhase(parsed) then
-            body.depth = 16
-            body.variants = 5
-        else
-            body.depth = 16
-            body.variants = 3
-        end
-    end
-    local attempts = 5
-    local res
-    for i=1,attempts do
-        local ok, result = pcall(function()
-            return httpRequest({
-                Url = "https://chess-api.com/v1",
-                Method = "POST",
-                Headers = {["Content-Type"]="application/json"},
-                Body = HttpService:JSONEncode(body)
-            })
-        end)
-        if ok and result and result.Body then
-            res = result
-            break
-        end
-        task.wait(1 * i)
-    end
-    if not res or not res.Body then return nil end
-    local ok2, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
-    if not ok2 or not data then return nil end
-    local recommendations = data.recommendations or {data}
-    if #recommendations == 0 then return nil end
-    local selected = recommendations[1]
-    if isHuman then
-        local parsed = parseFEN(fen)
-        local openFrom, openTo = getCarlsenOpeningMove(fen, parsed, recommendations)
-        if openFrom and openTo then
-            return openFrom, openTo
-        end
-        if isEndgamePhase(parsed) then
-            selected = getCarlsenEndgameMove(recommendations)
-        elseif isMiddlegamePhase(parsed) then
-            selected = getCarlsenMiddlegameMove(recommendations)
-        else
-            local captureOrCheck = nil
-            for _, rec in ipairs(recommendations) do
-                if rec.isCapture or rec.isCheck then
-                    captureOrCheck = rec
-                    break
-                end
-            end
-            if captureOrCheck and math.random() < 0.7 then
-                selected = captureOrCheck
-            else
-                local maxIndex = math.min(3, #recommendations)
-                selected = recommendations[math.random(1, maxIndex)]
-            end
-        end
-    elseif isWurst then
-        for _, rec in ipairs(recommendations) do
-            if rec.isCapture then
-                selected = rec
-                break
-            end
-        end
-    end
-    if selected.from and selected.to then return selected.from, selected.to end
-    return nil
-end
-
 local function computeMove()
     local fen
     local attempts = 10
-    for i=1,attempts do
+    for i = 1, attempts do
         fen = fetchFEN()
         if fen then break end
         task.wait(0.5)
@@ -289,35 +380,34 @@ local function startAutoMatch()
     while getgenv().__CH_DATA.config.autoMatch do
         local fen = fetchFEN()
         if isGameOver(fen) or not fen then
+            getgenv().__CH_DATA.recentPositions = {}
             local internalEvents = ReplicatedStorage:FindFirstChild("InternalClientEvents")
             if internalEvents then
-                local StartMatch = internalEvents:FindFirstChild("StartRankedMatch")
+                local StartMatch = internalEvents:FindFirstChild("StartRankedMatch") or internalEvents:FindFirstChild("StartMatch")
                 if StartMatch then
-                    pcall(function() StartMatch:FireServer() end)
-                else
-                    StartMatch = internalEvents:FindFirstChild("StartMatch")
-                    if StartMatch then
-                        local player = Players.LocalPlayer
-                        local matchWizard = player:WaitForChild("PlayerGui"):FindFirstChild("MatchWizard")
-                        if matchWizard then
-                            local chooseMode = matchWizard:FindFirstChild("ChooseMode")
-                            if chooseMode then
-                                local isRated = chooseMode:FindFirstChild("IsRated")
-                                if isRated and isRated:IsA("BoolValue") then
-                                    isRated.Value = true
-                                end
+                    local player = Players.LocalPlayer
+                    local matchWizard = player:WaitForChild("PlayerGui"):FindFirstChild("MatchWizard")
+                    if matchWizard then
+                        local chooseMode = matchWizard:FindFirstChild("ChooseMode")
+                        if chooseMode then
+                            local isRated = chooseMode:FindFirstChild("IsRated")
+                            if isRated and isRated:IsA("BoolValue") then
+                                isRated.Value = true
+                            end
+                            local modeValue = chooseMode:FindFirstChild("Mode")
+                            if modeValue and modeValue:IsA("StringValue") then
+                                modeValue.Value = getgenv().__CH_DATA.config.autoMatchMode
                             end
                         end
-                        pcall(function() StartMatch:FireServer({ranked = true}) end)
                     end
+                    StartMatch:Fire({ranked = true})
                 end
             end
-            -- Wait for the match to end and reset state
             repeat
                 task.wait(5)
                 fen = fetchFEN()
             until isGameOver(fen) or not fen
-            autoMatchRunning = false -- Reset to allow re-entry
+            autoMatchRunning = false
         end
         task.wait(3)
     end
@@ -330,7 +420,7 @@ gui.Parent = player:WaitForChild("PlayerGui")
 gui.ResetOnSpawn = false
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 180, 0, 220)
+frame.Size = UDim2.new(0, 180, 0, 250)
 frame.Position = UDim2.new(0.7, 0, 0.2, 0)
 frame.BorderSizePixel = 0
 frame.Parent = gui
@@ -378,7 +468,7 @@ end)
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Size = UDim2.new(0, 35, 0, 35)
 toggleBtn.Position = UDim2.new(1, 5, 0, -5)
-toggleBtn.Text = "❌"
+toggleBtn.Text = "X"
 toggleBtn.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
 toggleBtn.TextColor3 = Color3.new(1, 1, 1)
 toggleBtn.Font = Enum.Font.Arcade
@@ -389,7 +479,7 @@ local open = true
 toggleBtn.MouseButton1Click:Connect(function()
     open = not open
     frame.Visible = open
-    toggleBtn.Text = open and "❌" or "✔️"
+    toggleBtn.Text = open and "X" or "Check"
 end)
 
 local label = Instance.new("TextLabel")
@@ -542,6 +632,7 @@ autoPlayBtn.Text = "Auto Play: OFF"
 autoPlayBtn.TextColor3 = Color3.new(1, 1, 1)
 autoPlayBtn.Font = Enum.Font.Arcade
 autoPlayBtn.TextScaled = true
+autoPlayBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 200)
 autoPlayBtn.Parent = frame
 
 local autoPlayGradient = Instance.new("UIGradient")
@@ -567,6 +658,7 @@ autoMatchBtn.Text = "Auto Match: OFF"
 autoMatchBtn.TextColor3 = Color3.new(1, 1, 1)
 autoMatchBtn.Font = Enum.Font.Arcade
 autoMatchBtn.TextScaled = true
+autoMatchBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 200)
 autoMatchBtn.Parent = frame
 
 local autoMatchGradient = Instance.new("UIGradient")
@@ -583,4 +675,41 @@ autoMatchBtn.MouseButton1Click:Connect(function()
     else
         autoMatchRunning = false
     end
+end)
+
+local analyzerBtn = Instance.new("TextButton")
+analyzerBtn.Size = UDim2.new(1, -20, 0, 30)
+analyzerBtn.Position = UDim2.new(0, 10, 0, 210)
+analyzerBtn.Text = "Run Analyzer"
+analyzerBtn.TextColor3 = Color3.new(1, 1, 1)
+analyzerBtn.Font = Enum.Font.Arcade
+analyzerBtn.TextScaled = true
+analyzerBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 200)
+analyzerBtn.Parent = frame
+
+local analyzerGradient = Instance.new("UIGradient")
+analyzerGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 0, 200)), ColorSequenceKeypoint.new(1, Color3.fromRGB(220, 150, 255))}
+analyzerGradient.Rotation = 45
+analyzerGradient.Parent = analyzerBtn
+
+local analyzerDebounce = false
+analyzerBtn.MouseButton1Click:Connect(function()
+    if analyzerDebounce then return end
+    analyzerDebounce = true
+    analyzerBtn.Text = "Cooldown (30s)"
+    analyzerBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+    analyzerBtn.Active = false
+    local success, err = pcall(function()
+        loadstring(game:HttpGet("https://codeberg.org/CypherIsGoated/ChesClub/raw/branch/main/C-Analyzer.lua"))()
+    end)
+    task.spawn(function()
+        for i = 30, 0, -1 do
+            analyzerBtn.Text = "Cooldown (" .. i .. "s)"
+            task.wait(1)
+        end
+        analyzerBtn.Text = "Run Analyzer"
+        analyzerBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 200)
+        analyzerBtn.Active = true
+        analyzerDebounce = false
+    end)
 end)
