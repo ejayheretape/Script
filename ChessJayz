@@ -238,8 +238,8 @@ local function queryWebEngine(fen, engine)
         body.maxThinkingTime = 100
         body.variants = 5
     elseif isHuman then
-        body.depth = 12
-        body.variants = 3
+        body.depth = 4
+        body.variants = 1
     else
         body.depth = 16
         body.variants = 5
